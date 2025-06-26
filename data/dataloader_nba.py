@@ -134,9 +134,9 @@ class NBADatasetMinMax(Dataset):
         past_traj_rel = (pre_motion_3D - initial_pos).contiguous() 
         if rotate:
             past_traj_rel, fut_traj, past_traj_abs = rotate_trajs_x_direction(past_traj_rel, fut_traj, past_traj_abs)
-        past_traj_vel = torch.cat((past_traj_rel[:, 1:] - past_traj_rel[:, :-1], torch.zeros_like(past_traj_rel[:, -1:])), dim=1) 
+        past_traj_vel = torch.cat((past_traj_rel[:, :, 1:] - past_traj_rel[:, :, :-1], torch.zeros_like(past_traj_rel[:, :, -1:])), dim=2) 
         past_traj = torch.cat((past_traj_abs, past_traj_rel, past_traj_vel), dim=-1)
-        self.fut_traj_vel = torch.cat((fut_traj[:, 1:] - fut_traj[:, :-1], torch.zeros_like(fut_traj[:, -1:])), dim=1)
+        self.fut_traj_vel = torch.cat((fut_traj[:, :, 1:] - fut_traj[:, :, :-1], torch.zeros_like(fut_traj[:, :, -1:])), dim=2)
         
         if training:
             cfg.fut_traj_max = fut_traj.max()
