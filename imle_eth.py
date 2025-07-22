@@ -37,7 +37,6 @@ def parse_config():
     parser.add_argument('--epochs', default=None, type=int, help='Override the number of epochs in the config file.')
     parser.add_argument('--batch_size', default=None, type=int, help='Override the batch size in the config file.')
     parser.add_argument('--data_dir', type=str, default='./data/eth_ucy', help='Directory where the data is stored.')
-    parser.add_argument('--overfit', default=False, action='store_true', help='Overfit the testing set by setting it to the same entries as the training set.')
     parser.add_argument('--n_train', type=int, default=32500, help='Number training scenes used.')
     parser.add_argument('--n_test', type=int, default=12500, help='Number testing scenes used.')
     parser.add_argument('--checkpt_freq', default=5, type=int, help='Override the checkpt_freq in the config file.')
@@ -141,10 +140,6 @@ def init_basics(args):
         cfg.subset = args.subset
         tag += f'_{cfg.subset}'
     
-
-        if args.overfit:
-            tag += '_overfit'
-
         cfg.rotate = args.rotate
         if args.rotate:
             cfg.rotate_time_frame = args.rotate_time_frame
@@ -243,16 +238,14 @@ def build_data_loader(cfg, args):
         pin_memory=True)
     
 
-    if args.overfit:
-        test_dset = copy.deepcopy(train_dset)
-    else:
-        test_dset = ETHDataset(
+    test_dset = ETHDataset(
         cfg=cfg,
         training=False,
         data_dir=args.data_dir,
         subset=args.subset,
         rotate_time_frame=args.rotate_time_frame,
-        imle=False)
+        imle=False,
+        type = args.data_source)
         
     test_loader = DataLoader(
         test_dset,

@@ -62,8 +62,8 @@ This project supports three major trajectory datasets:
 - **Sources**:
   - Based on the original ETH-UCY dataset used in [SocialGAN](https://github.com/agrimgupta92/sgan)
   - Dataset files courtesy of [EigenTrajectory](https://github.com/InhwanBae/EigenTrajectory)
-- **Setup**: Execute the download script in `data/eth-ucy/` to obtain the dataset. Run `./data/eth_ucy/download_eth_ucy_dataset.sh`. This is the same script from [EigenTrajectory](https://github.com/InhwanBae/EigenTrajectory). 
-- **Note**: This version differs from the one used in LED
+
+- **Note**: This version differs from the one used in LED. You can specify `--data_source` to select the version of your interest.
 
 ### 3. Stanford Drone Dataset (SDD)
 - **Description**: Diverse trajectory data from a university campus environment
@@ -115,11 +115,11 @@ For each dataset, we need to train our MoFlow teacher model first:
 python fm_nba.py --exp <exp_name> --tied_noise --fm_in_scaling --checkpt_freq 5 --batch_size 192 --init_lr 1e-3
 
 ### ETH dataset
-python3 fm_eth.py --exp <exp_name> --rotate --data_source LED --rotate_time_frame 6 --subset eth --tied_noise --fm_in_scaling --checkpt_freq 1 --batch_size 32 --init_lr 1e-4 
-python3 fm_eth.py --exp <exp_name> --rotate --data_source LED --rotate_time_frame 6 --subset hotel --tied_noise --fm_in_scaling --checkpt_freq 1 --batch_size 48 --init_lr 1e-4 
-python3 fm_eth.py --exp <exp_name> --rotate --data_source LED --rotate_time_frame 6 --subset univ --tied_noise --fm_in_scaling --checkpt_freq 1 --batch_size 48 --init_lr 1e-4 
-python3 fm_eth.py --exp <exp_name> --rotate --data_source LED --rotate_time_frame 6 --subset zara1 --tied_noise --fm_in_scaling --checkpt_freq 1 --batch_size 32 --init_lr 1e-4 
-python3 fm_eth.py --exp <exp_name> --rotate --data_source LED --rotate_time_frame 6 --subset zara2 --tied_noise --fm_in_scaling --checkpt_freq 1 --batch_size 32 --init_lr 1e-4 
+python3 fm_eth.py --exp <exp_name> --rotate --rotate_time_frame 6 --subset eth --tied_noise --fm_in_scaling --checkpt_freq 1 --batch_size 32 --init_lr 1e-4 
+python3 fm_eth.py --exp <exp_name> --rotate --rotate_time_frame 6 --subset hotel --tied_noise --fm_in_scaling --checkpt_freq 1 --batch_size 48 --init_lr 1e-4 
+python3 fm_eth.py --exp <exp_name> --rotate -rotate_time_frame 6 --subset univ --tied_noise --fm_in_scaling --checkpt_freq 1 --batch_size 48 --init_lr 1e-4 
+python3 fm_eth.py --exp <exp_name> --rotate --rotate_time_frame 6 --subset zara1 --tied_noise --fm_in_scaling --checkpt_freq 1 --batch_size 32 --init_lr 1e-4 
+python3 fm_eth.py --exp <exp_name> --rotate --rotate_time_frame 6 --subset zara2 --tied_noise --fm_in_scaling --checkpt_freq 1 --batch_size 32 --init_lr 1e-4 
 
 ### SDD dataset
 python fm_sdd.py --exp <exp_name> --rotate --rotate_time_frame 6 --tied_noise --fm_in_scaling --checkpt_freq 1 --batch_size 48 --init_lr 1e-4 --perturb_ctx 0.03

@@ -32,6 +32,7 @@ def parse_config():
     parser.add_argument('--eval_on_train', default=False, action='store_true', help='Evaluate the model on the training set.')
 
     # Data configuration
+    parser.add_argument('--data_source', default='original', type=str, help='Data source for the experiment. Either be original or preprocessed ones from LED.')
     parser.add_argument('--batch_size', default=None, type=int, help='Override the batch size in the config file.')
     parser.add_argument('--data_dir', type=str, default='./data/eth_ucy', help='Directory where the data is stored.')
     parser.add_argument('--n_train', type=int, default=32500, help='Number training scenes used.')
@@ -120,7 +121,8 @@ def build_data_loader(cfg, args):
         data_dir=args.data_dir,
         subset=cfg.subset,
         rotate_time_frame=args.rotate_time_frame,
-        imle=True)
+        imle=True,
+        type = args.data_source)
 
     train_loader = DataLoader(
         train_dset,
@@ -137,7 +139,8 @@ def build_data_loader(cfg, args):
         data_dir=args.data_dir,
         subset=cfg.subset,
         rotate_time_frame=args.rotate_time_frame,
-        imle=False)
+        imle=False,
+        type = args.data_source)
         
     test_loader = DataLoader(
         test_dset,

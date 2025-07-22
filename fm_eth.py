@@ -31,7 +31,6 @@ def parse_config():
     parser.add_argument('--epochs', default=None, type=int, help='Override the number of epochs in the config file.')
     parser.add_argument('--batch_size', default=None, type=int, help='Override the batch size in the config file.')
     parser.add_argument('--data_dir', type=str, default='./data/eth_ucy', help='Directory where the data is stored.')
-    parser.add_argument('--overfit', default=False, action='store_true', help='Overfit the testing set by setting it to the same entries as the training set.')
     parser.add_argument('--n_train', type=int, default=None, help='Override the number training scenes used.')
     parser.add_argument('--n_test', type=int, default=None, help='Override the number testing scenes used.')
     parser.add_argument('--checkpt_freq', default=5, type=int, help='Override the checkpt_freq in the config file.')
@@ -210,9 +209,6 @@ def init_basics(args):
             if cfg.rotate_aug:
                 tag += '_aug'
 
-        if args.overfit:
-            tag += '_overfit'
-
         if args.n_train is not None:
             tag += f'_subset_train_{args.n_train}'
 
@@ -288,7 +284,7 @@ def init_basics(args):
 
 def build_data_loader(cfg, args):
     """
-    Build the data loader for the NBA dataset.
+    Build the data loader for the ETH dataset.
     """
     train_dset = ETHDataset(
         cfg=cfg,
@@ -307,10 +303,8 @@ def build_data_loader(cfg, args):
         collate_fn=seq_collate_eth,
         pin_memory=True)
 
-    if args.overfit:
-        test_dset = copy.deepcopy(train_dset)
-    else:
-        test_dset = ETHDataset(
+   
+    test_dset = ETHDataset(
         cfg=cfg,
         training=False,
         data_dir=args.data_dir,

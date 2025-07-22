@@ -135,17 +135,17 @@ def build_data_loader(cfg, args):
     
 
     test_dset = NBADatasetMinMax(
-    data_dir=args.data_dir,
-    obs_len=cfg.past_frames,
-    pred_len=cfg.future_frames,
-    training=False,
-    overfit=False,
-    test_scenes=args.n_test,
-    cfg=cfg,
-    rotate=args.rotate,
-    data_norm=args.data_norm,
-    imle=False)
-        
+        data_dir=args.data_dir,
+        obs_len=cfg.past_frames,
+        pred_len=cfg.future_frames,
+        training=False,
+        overfit=False,
+        test_scenes=args.n_test,
+        cfg=cfg,
+        rotate=args.rotate,
+        data_norm=args.data_norm,
+        imle=False)
+            
     test_loader = DataLoader(
         test_dset,
         batch_size=cfg.test_batch_size, ### change it from 500 

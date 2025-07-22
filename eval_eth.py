@@ -10,7 +10,7 @@ from tensorboardX import SummaryWriter
 from data.dataloader_eth_ucy import ETHDataset, seq_collate_eth
 
 from utils.config import Config
-from utils.utils import back_up_code_git, set_random_seed, log_config_to_file
+from utils.utils import set_random_seed, log_config_to_file
 
 from models.flow_matching import FlowMatcher
 from models.backbone_eth_ucy import ETHMotionTransformer
@@ -32,6 +32,7 @@ def parse_config():
 	parser.add_argument('--eval_on_train', default=False, action='store_true', help='Evaluate the model on the training set.')
 
 	# Data configuration
+	parser.add_argument('--data_source', default='original', type=str, help='Data source for the experiment. Either be original or preprocessed ones from LED.')
 	parser.add_argument('--batch_size', default=None, type=int, help='Override the batch size in the config file.')
 	parser.add_argument('--data_dir', type=str, default='./data/eth_ucy', help='Directory where the data is stored.')
 	parser.add_argument('--n_train', type=int, default=32500, help='Number training scenes used.')
@@ -147,7 +148,8 @@ def build_data_loader(cfg, args):
 		training=True,
 		data_dir=args.data_dir,
 		subset=cfg.subset,
-		rotate_time_frame=args.rotate_time_frame)
+		rotate_time_frame=args.rotate_time_frame,
+		type = args.data_source)
 
 	train_loader = DataLoader(
 		train_dset,
@@ -163,7 +165,8 @@ def build_data_loader(cfg, args):
 		training=False,
 		data_dir=args.data_dir,
 		subset=cfg.subset,
-		rotate_time_frame=args.rotate_time_frame)
+		rotate_time_frame=args.rotate_time_frame,
+		type = args.data_source)
 		
 	test_loader = DataLoader(
 		test_dset,
