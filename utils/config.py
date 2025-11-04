@@ -69,9 +69,9 @@ class Config:
 
         if self.train_mode:
             # save the updated yaml file
-            os.system('cp %s %s' % (self.cfg_path, self.cfg_dir))  # copy original config
+            os.system('cp %s %s' % (self.cfg_path, self.cfg_dir))  # copy hist10pred20 config
 
-            # dump the updated config from easydict [not perfect as there may be special items in the original config]
+            # dump the updated config from easydict [not perfect as there may be special items in the hist10pred20 config]
 
             def easydict_to_dict(easydict_obj):
                 # Function to convert EasyDict to a dictionary recursively

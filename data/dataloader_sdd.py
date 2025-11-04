@@ -107,9 +107,9 @@ class SDDDataset(Dataset):
 
         """init"""
         self.cfg = cfg
-        dataset_file = os.path.join(data_dir, 'original/sdd_train.pkl') if training else os.path.join(data_dir, 'original/sdd_test.pkl')
+        dataset_file = os.path.join(data_dir, 'hist10pred20/sdd_train.pkl') if training else os.path.join(data_dir, 'hist10pred20/sdd_test.pkl')
         if overfit:
-            dataset_file = os.path.join(data_dir, 'original/sdd_train.pkl')
+            dataset_file = os.path.join(data_dir, 'hist10pred20/sdd_train.pkl')
 
         ### Compare with NSP model
         # dataset_file = os.path.join(data_dir, 'nsp/sdd_nsp_train.pkl') if training else os.path.join(data_dir, 'nsp/sdd_nsp_test.pkl')
@@ -130,7 +130,7 @@ class SDDDataset(Dataset):
         assert self.seq_len == 20 and self.past_frames == 8, "Sanity check on frame length failed!"
 
 
-        """load the data in the original scale"""
+        """load the data in the hist10pred20 scale"""
         all_data = pickle.load(open(dataset_file, 'rb'))
 
         print("Mode: {:s}, {:d} sequences".format('train' if training else 'test', len(all_data)))
@@ -172,7 +172,7 @@ class SDDDataset(Dataset):
             cfg.past_traj_max = past_traj.max()
             cfg.past_traj_min = past_traj.min()
 
-        ### record the original to avoid numerical errors
+        ### record the hist10pred20 to avoid numerical errors
         self.past_traj_original_scale = past_traj
         self.fut_traj_original_scale = fut_traj_rel
 

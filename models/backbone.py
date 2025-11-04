@@ -14,16 +14,17 @@ class MotionTransformer(nn.Module):
     def __init__(self, model_config, logger, config):
         super().__init__()
         self.model_cfg = model_config
-        self.dim = self.model_cfg.CONTEXT_ENCODER.D_MODEL
+        self.dim = self.model_cfg.CONTEXT_ENCODER.D_MODEL # 统一的通道维（上下游对齐）
         self.config = config
 
         use_pre_norm = self.model_cfg.get('USE_PRE_NORM', False)
 
         assert not use_pre_norm, "Pre-norm is not supported in this model"
 
+        # （1）上下文编码器：把历史轨迹/邻居信息编码成每个 agent 的上下文向量
         self.context_encoder = build_context_encoder(self.model_cfg.CONTEXT_ENCODER, use_pre_norm)
 
-        ### serves the purpose of positional encoding
+        # （2）“位置编码”的三件套：K 维query索引、A维agent索引、以及一个事后融合MLP
         self.motion_query_embedding = nn.Embedding(self.model_cfg.NUM_PROPOSED_QUERY, self.dim)
         self.agent_order_embedding = nn.Embedding(self.model_cfg.CONTEXT_ENCODER.NUM_OF_ATTN_NEIGHBORS, self.dim)
         self.post_pe_cat_mlp = nn.Sequential(
@@ -32,7 +33,9 @@ class MotionTransformer(nn.Module):
             nn.ReLU(),
             nn.Linear(self.dim, self.dim),
         )
+        # 说明：这里把 query/agent 的PE与 token 融合，作为 decoder 的输入 token
 
+        # （3）时间嵌入：正弦时间编码 + 两层MLP，输出维度设为 time_dim(这些奇奇怪怪的编码都是什么?)
         time_dim = self.dim * 1
         sinu_pos_emb = SinusoidalPosEmb(self.dim, theta = 10000)
 
@@ -43,6 +46,7 @@ class MotionTransformer(nn.Module):
             nn.Linear(time_dim, time_dim),
         )
 
+        # （4）噪声/中间态 y 的嵌入：把 [T*D] 维的向量映到 denoiser 的通道维
         self.noisy_y_mlp = nn.Sequential(
             nn.Linear(self.model_cfg.MODEL_OUT_DIM, self.dim),
             nn.ReLU(),
@@ -51,10 +55,12 @@ class MotionTransformer(nn.Module):
             nn.Linear(self.dim, self.dim),
         )
 
+        # （5）两路自注意：沿 K（不同proposal分支）与沿 A（不同agent）做 self-attn
         dropout_ = self.model_cfg.MOTION_DECODER.DROPOUT_OF_ATTN
         self.noisy_y_attn_k = nn.TransformerEncoderLayer(d_model=self.dim, nhead=4, dim_feedforward=self.dim * 4, dropout=dropout_, batch_first=True)
         self.noisy_y_attn_a = nn.TransformerEncoderLayer(d_model=self.dim, nhead=4, dim_feedforward=self.dim * 4, dropout=dropout_, batch_first=True)
 
+        # （6）把三路信息拼接后（context、y_emb、t_emb）先做一个融合，再送 decoder
         dim_decoder = self.model_cfg.MOTION_DECODER.D_MODEL
         self.init_emb_fusion_mlp = nn.Sequential(
             nn.Linear(self.dim + time_dim + self.dim, self.dim),
@@ -62,7 +68,8 @@ class MotionTransformer(nn.Module):
             nn.ReLU(),
             nn.Linear(self.dim, dim_decoder),
         )
-        
+
+        # （7）decoder 的读出层：回归向量（速度/残差/去噪方向）与分类分支（best-of-K用）
         self.readout_mlp = nn.Sequential(
             nn.Linear(dim_decoder, dim_decoder),
             nn.ReLU(),
@@ -73,17 +80,23 @@ class MotionTransformer(nn.Module):
 
         self.reg_head = build_mlps(c_in=self.dim, mlp_channels=self.model_cfg.REGRESSION_MLPS, ret_before_act=True, without_norm=True)
         self.cls_head = build_mlps(c_in=dim_decoder, mlp_channels=self.model_cfg.CLASSIFICATION_MLPS, ret_before_act=True, without_norm=True)
+        # 说明：你这里有两套 readout：一个是 reg_head（输入 dim，输出 T*D），
+        # 另一个是 cls_head（输入 decoder维，输出 K类logit）。实际 forward 里 reg_head 用在 decoder 之后。
 
-        # print out the number of parameters
+        # （8）统计参数量，便于日志观测
         params_encoder = sum(p.numel() for p in self.context_encoder.parameters())
         params_decoder = sum(p.numel() for p in self.motion_decoder.parameters())
         params_total = sum(p.numel() for p in self.parameters())
         params_other = params_total - params_encoder - params_decoder
-        logger.info("Total parameters: {:,}, Encoder: {:,}, Decoder: {:,}, Other: {:,}".format(params_total, params_encoder, params_decoder, params_other))
+        logger.info("Total parameters: {:,}, Encoder: {:,}, Decoder: {:,}, Other: {:,}".format(
+            params_total, params_encoder, params_decoder, params_other
+        ))
 
     def apply_PE(self, y_emb, k_pe_batch, a_pe_batch):
         '''
         Apply positional encoding to the input embeddings according to self.model_cfg. This is used for ablation study.
+        根据开关把 K（proposal）PE、A（agent）PE 加到 token 上。
+        做消融时可以只开其中之一或全关。
         '''
         if self.model_cfg.get('USE_PE_QUERY', True) and self.model_cfg.get('USE_PE_AGENT', True):
             y_emb = y_emb + k_pe_batch + a_pe_batch
@@ -106,47 +119,53 @@ class MotionTransformer(nn.Module):
             - batch_size: batch size
             - indexes: exist when we aim to perform IMLE
         time: denoising time step
+        y: 噪声或中间态（如 x_t 或 y_t），形状 [B, K, A, T*D]
+        x_data: 数据字典（包含历史轨迹、原尺度等）
+        time: 连续时间步（CFM/F.M. 的 t）
         '''
-        ### NBA assertions
-        assert list(y.shape[2:]) == [11, 20, 2] or list(y.shape[2:]) == [11, 40], 'y shape is not correct'
-        if y.size(-1) == 2:
-            y = y.reshape((-1, 20, 11, 40))
+        ### Rat assertions
+        # assert list(y.shape[2:]) == [8, 30, 2] or list(y.shape[2:]) == [8, 60], 'y shape is not correct'
+        # if y.size(-1) == 2:
+        #     y = y.reshape((-1, 20, 8, 40))
+
         device = y.device
         B, K, A, _ = y.shape
 
-        ### context encoder
+        # （1）上下文编码：根据历史（及邻居）得到每个 agent 的上下文向量 [B, A, D]
         encoder_out = self.context_encoder(x_data['past_traj_original_scale'])  # [B, A, D]
+        # 扩到 [B, K, A, D] 与 proposal 维对齐
         encoder_out_batch = repeat(encoder_out, 'b a d -> b k a d', k=K, a=A) 	# [B, K, A, D]
 
-
-        ### init embeddings
-
-   
-
+        # （2）把 y（T*D）嵌入到通道维：得到每个 (B,K,A) 的 token
         y_emb = self.noisy_y_mlp(y)  	# [B, K, A, D]
 
+        # （3）时间嵌入：若方法是 fm，则把 t 放大到更大的数值（经验 trick），再过 time_mlp
         time_ = time
         if self.config.denoising_method == 'fm':
             time = time * 1000.0  # flow matching time upscaling
 
         t_emb = self.time_mlp(time) 	# [B, D]
-        t_emb_batch = repeat(t_emb, 'b d -> b k a d', b=B, k=K, a=A) # [B, K, A, D]
+        t_emb_batch = repeat(t_emb, 'b d -> b k a d', b=B, k=K, a=A) # [B, K, A, D]  # 与 (K,A) 对齐
 
+        # （4）构造 K、A 的“索引型位置编码”并扩展到 batch
         k_pe = self.motion_query_embedding(torch.arange(self.model_cfg.NUM_PROPOSED_QUERY, device=device))	# [K, D]
         k_pe_batch = repeat(k_pe, 'k d -> b k a d', b=B, a=A)	# [B, K, A, D]
 
         a_pe = self.agent_order_embedding(torch.arange(self.model_cfg.CONTEXT_ENCODER.NUM_OF_ATTN_NEIGHBORS, device=device))  # [A, D]
         a_pe_batch = repeat(a_pe, 'a d -> b k a d', b=B, k=K)	# [B, K, A, D]
 
-
+        # （5）对 y_emb 分别沿 K、沿 A 做自注意，增强 proposal间/agent间的信息交互
+        # 先加PE再按 K 维重排为序列：(b a) 为批次，长度 K
         y_emb_k = rearrange(self.apply_PE(y_emb, k_pe_batch, a_pe_batch), 'b k a d -> (b a) k d')
         y_emb_k = self.noisy_y_attn_k(y_emb_k)
         y_emb = rearrange(y_emb_k, '(b a) k d -> b k a d', b=B, a=A)
 
+        # 再按 A 维重排为序列：(b k) 为批次，长度 A
         y_emb_a = rearrange(y_emb, 'b k a d -> (b k) a d')
         y_emb_a = self.noisy_y_attn_a(y_emb_a)
         y_emb = rearrange(y_emb_a, '(b k) a d -> b k a d', b=B, k=K)
 
+        # （6）训练时可选的 embedding 级丢弃（按 t 的逻辑概率掩蔽整个 token）
         if self.training and self.config.get('drop_method', None) == 'emb':
             assert self.config.get('drop_logi_k', None) is not None and self.config.get('drop_logi_m', None) is not None
             m, k = self.config.drop_logi_m, self.config.drop_logi_k
@@ -155,12 +174,12 @@ class MotionTransformer(nn.Module):
             y_emb = y_emb.masked_fill(torch.rand_like(p_m) < p_m, 0.)
 
 
-        ### send to motion decoder
+        # （7）与上下文、时间一起融合；再加一次 PE 后交给 motion decoder
         emb_fusion = self.init_emb_fusion_mlp(torch.cat((encoder_out_batch, y_emb, t_emb_batch), dim=-1))	 	# [B, K, A, D]
         query_token = self.post_pe_cat_mlp(self.apply_PE(emb_fusion, k_pe_batch, a_pe_batch)) 								# [B, K, A, D]
         readout_token = self.motion_decoder(query_token, t_emb)													# [B, K, A, D]	
 
-        ### readout layers
+        # （8）读出：回归分支输出 T*D，分类分支输出 [B,K,A] 的打分
         denoiser_x = self.reg_head(readout_token)  										# [B, K, A, F * D]
         denoiser_cls = self.cls_head(readout_token).squeeze(-1) 						# [B, K, A]
 

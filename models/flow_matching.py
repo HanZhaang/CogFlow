@@ -11,7 +11,7 @@ from collections import namedtuple
 from einops import rearrange, reduce, repeat
 
 from tqdm.auto import tqdm
-from utils.normalization import unnormalize_min_max, unnormalize_sqrt
+from utils.normalization import unnormalize_min_max, unnormalize_sqrt, unnormalize_mean_std
 from utils.utils import apply_mask
 from utils.utils import LossBuffer
 
@@ -57,6 +57,7 @@ class FlowMatcher(nn.Module):
         self.cfg = cfg
         self.model = model
         self.logger = logger
+        self.handles = []
 
         self.num_agents = cfg.agents
         self.out_dim = cfg.MODEL.MODEL_OUT_DIM
@@ -167,7 +168,7 @@ class FlowMatcher(nn.Module):
         """
 
         # random time steps to inject noise
-        bs = y_start_k.shape[0]
+        bs = y_start_k.shape[0] # batch size
         if self.cfg.t_schedule == 'uniform':
             t = torch.rand((bs, ), device=self.device)
         elif self.cfg.t_schedule == 'logit_normal':
@@ -191,8 +192,6 @@ class FlowMatcher(nn.Module):
                 rand_num = torch.rand((bs, ), device=self.device)
 
                 t = t_1 * (rand_num < prob_1) + t_2 * (rand_num >= prob_1)
-
-
 
         assert t.min() >= 0 and t.max() <= 1
 
@@ -239,12 +238,15 @@ class FlowMatcher(nn.Module):
                 gt_y_data = rearrange(gt_y_data, 'b k a (f d) -> (b a) k f d', f=self.cfg.future_frames)
 
                 if self.cfg.get('data_norm', None) == 'min_max':
-                    y_data_metric = unnormalize_min_max(y_data_, self.cfg.fut_traj_min, self.cfg.fut_traj_max, -1, 1)
-                    gt_y_data_metric = unnormalize_min_max(gt_y_data, self.cfg.fut_traj_min, self.cfg.fut_traj_max, -1, 1)
+                    # y_data_metric = unnormalize_min_max(y_data_, self.cfg.fut_traj_min, self.cfg.fut_traj_max, -1, 1)
+                    # gt_y_data_metric = unnormalize_min_max(gt_y_data, self.cfg.fut_traj_min, self.cfg.fut_traj_max, -1, 1)
+                    y_data_metric = unnormalize_mean_std(y_data_, self.cfg.stats["fut_mean"], self.cfg.stats["fut_std"], 1)  # [B, K, A, T, D]
+                    gt_y_data_metric = unnormalize_mean_std(gt_y_data, self.cfg.stats["fut_mean"], self.cfg.stats["fut_std"], 1)  # [B, K, A, T, D]
+
                 elif self.cfg.get('data_norm', None) == 'sqrt':
                     y_data_metric = unnormalize_sqrt(y_data_, self.sqrt_a_, self.sqrt_b_)
                     gt_y_data_metric = unnormalize_sqrt(gt_y_data, self.sqrt_a_, self.sqrt_b_)
-                elif self.cfg.get('data_norm', None) == 'original':
+                elif self.cfg.get('data_norm', None) == 'hist10pred20':
                     y_data_metric = y_data_
                     gt_y_data_metric = gt_y_data
 
@@ -349,49 +351,73 @@ class FlowMatcher(nn.Module):
     def p_losses(self, x_data, log_dict=None):
         """
         Denoising model training.
+        训练一次 denoising / flow-matching 步，返回总损失与各子损失。
+        x_data 里通常包含：
+          - 'fut_traj': [B, A, T, D]  未来轨迹真值（已归一化）；A=agent数，T=future_frames，D=2(x,y)
+          - （可能还有历史、掩码等，用于 self.model 的条件）
         """
 
-        # init
-        B, A = x_data['fut_traj'].shape[:2]
-        K = self.cfg.denoising_head_preds
-        T = self.cfg.future_frames
+        # ---------- 初始化与维度 ----------
+        B, A = x_data['fut_traj'].shape[:2] # 批大小B、场景内agent数A
+        K = self.cfg.denoising_head_preds   # 每个样本的候选/采样条数（多模态分支数）
+        T = self.cfg.future_frames          # 未来帧数
         assert self.objective == 'pred_data', 'only pred_data is supported for now'
+        # 当前实现只支持直接预测数据（而非预测噪声/速度之外的目标）
 
-        # forward process to create noisy samples
-        fut_traj_normalized = repeat(x_data['fut_traj'], 'b a f d -> b k a (f d)', k=K)
+        # ---------- 前向扩散/路径采样：构造 y_t、u_t ----------
+        # 把未来真值复制K份以便“best-of-K”训练；展平(T,D)->(T*D)便于与模型接口对齐
+        fut_traj_normalized = repeat(x_data['fut_traj'],   # [B, A, T, D]
+                                     'b a f d -> b k a (f d)', k=K) # 变成 [B, K, A, T*D]
+        # 从损失输入构造器拿到时间t、中间状态y_t、目标速度/残差u_t、（占位返回）、损失权重l_weight
+        # 常见返回：t:[B], y_t:[B,K,A,T*D], u_t:[B,K,A,T*D], l_weight:[B]或[B,A]
         t, y_t, u_t, _, l_weight = self.get_loss_input(y_start_k = fut_traj_normalized)
 
-        # model pass
+        # ---------- 模型前向输入尺度调整（可选） ----------
         if self.cfg.fm_in_scaling:
+            # 某些FM变体会把输入按t缩放；pad_t_like_x用于把t的标量编码扩展/对齐到y_t的形状
             y_t_in = y_t * pad_t_like_x(self.get_input_scaling(t), y_t)
         else:
             y_t_in = y_t
 
+        # ---------- 随机输入丢弃（可选，类似CFG/抗过拟合） ----------
         if self.training and self.cfg.get('drop_method', None) == 'input':
+            # 逻辑型丢弃概率：p_m = sigmoid(k*(t-m))，t越大越容易被置零（或反之，取决于m,k）
             assert self.cfg.get('drop_logi_k', None) is not None and self.cfg.get('drop_logi_m', None) is not None
             m, k = self.cfg.drop_logi_m, self.cfg.drop_logi_k
-            p_m = 1 / (1 + torch.exp(-k * (t - m)))
-            p_m = p_m[:, None, None, None]
-            y_t_in = y_t_in.masked_fill(torch.rand_like(p_m) < p_m, 0.)
+            p_m = 1 / (1 + torch.exp(-k * (t - m)))   # [B]，随t变化的丢弃概率
+            p_m = p_m[:, None, None, None]            # 扩展到 [B,1,1,1]，便于与 y_t_in 广播
+            y_t_in = y_t_in.masked_fill(torch.rand_like(p_m) < p_m, 0.)    # 以概率 p_m 将 y_t_in 掩蔽为0，产生“难例/缺失”训练
 
+        # ---------- 模型前向 ----------
+        # self.model: 输入（噪声/中间态 y_t_in, 时间 t, 上下文 x_data），输出：
+        #   - model_out: [B, K, A, T*D]  速度/残差/去噪方向（取决于 fm_wrapper_func 的定义）
+        #   - denoiser_cls: [B, K, A]    每个候选分支的logits，用于选择/分类损失（可选）
         model_out, denoiser_cls = self.model(y_t_in, t, x_data=x_data)  # [B, K, A, T * D] + [B, K, A]
-        denoised_y = self.fm_wrapper_func(y_t, t, model_out)
+        # 把网络输出包一层“FM包装器”：根据FM定义把 model_out 映射到“去噪后的 y”（如 ŷ_0 或 ŷ_{t-Δ}）
+        # 常见：Rectified Flow时 denoised_y = y_t + Δt * v_theta(x_t,t)；或 Wrapper 把速度场转换为数据空间
+        denoised_y = self.fm_wrapper_func(y_t, t, model_out) # [B, K, A, T*D]
 
-        # component selection
+        # ---------- 还原形状，进入度量空间（反归一化） ----------
+        # 把最后一维 T*D 还原成 [T, D]
         denoised_y = rearrange(denoised_y, 'b k a (f d) -> b k a f d', f = self.cfg.future_frames)
+        # 同样处理GT（注意 fut_traj_normalized 此刻是 [B,K,A,T*D]，还原成 [B,K,A,T,2]）
         fut_traj_normalized = fut_traj_normalized.view(B, K, A, T, 2)
+        # 根据 data_norm 反归一化到“评估/物理单位”（像素或厘米）
         if self.cfg.get('data_norm', None) == 'min_max':
-            denoised_y_metric = unnormalize_min_max(denoised_y, self.cfg.fut_traj_min, self.cfg.fut_traj_max, -1, 1) 		 # [B, K, A, T, D]
-            fut_traj_metric = unnormalize_min_max(fut_traj_normalized, self.cfg.fut_traj_min, self.cfg.fut_traj_max, -1, 1)  # [B, K, A, T, D]
+            # denoised_y_metric = unnormalize_min_max(denoised_y, self.cfg.fut_traj_min, self.cfg.fut_traj_max, -1, 1) 		 # [B, K, A, T, D]
+            # fut_traj_metric = unnormalize_min_max(fut_traj_normalized, self.cfg.fut_traj_min, self.cfg.fut_traj_max, -1, 1)  # [B, K, A, T, D]
+            denoised_y_metric = unnormalize_mean_std(denoised_y, self.cfg.stats["fut_mean"], self.cfg.stats["fut_std"], 1) 		 # [B, K, A, T, D]
+            fut_traj_metric = unnormalize_mean_std(fut_traj_normalized, self.cfg.stats["fut_mean"], self.cfg.stats["fut_std"], 1)  # [B, K, A, T, D]
         elif self.cfg.get('data_norm', None) == 'sqrt':
             denoised_y_metric = unnormalize_sqrt(denoised_y, self.sqrt_a_, self.sqrt_b_)            # [B, K, A, T, D]
             fut_traj_metric = unnormalize_sqrt(fut_traj_normalized, self.sqrt_a_, self.sqrt_b_)     # [B, K, A, T, D]
-        elif self.cfg.get('data_norm', None) == 'original':
+        elif self.cfg.get('data_norm', None) == 'hist10pred20':
             denoised_y_metric = denoised_y
             fut_traj_metric = fut_traj_normalized
         else:
             raise ValueError(f"Unknown data normalization method: {self.cfg.get('data_norm', None)}")
 
+        # ---------- 速度正则（未实现分支，占位） ----------
         if self.cfg.get('LOSS_VELOCITY', False):
             raise NotImplementedError
             denoised_y_metric = rearrange(denoised_y_metric, 'b k a (f d) -> b k a f d', f = self.cfg.future_frames, d = 4)
@@ -403,14 +429,19 @@ class FlowMatcher(nn.Module):
             denoised_y_metric_xy = denoised_y_metric
             loss_reg_vel = torch.zeros(1).to(self.device)
 
+        # ---------- 均值绝对误差（或平方误差） ----------
+        # 逐agent逐帧L2误差：||pred-gt||_2，形状 [B,K,A,T]
         denoising_error_per_agent = (denoised_y_metric_xy - fut_traj_metric).view(B, K, A, T, 2).norm(dim=-1)  	 # [B, K, A, T]
 
+        # 可选：把L2误差平方，等价于 MSE 的根去掉（按需求）
         if self.cfg.get('LOSS_REG_SQUARED', False):
             denoising_error_per_agent = denoising_error_per_agent ** 2
 
+        # 聚合到“场景级”误差：对 agent 维 A 求平均 ⇒ [B,K,T]
         denoising_error_per_scene = denoising_error_per_agent.mean(dim=-2)  								 	 # [B, K, T]
 
         if self.cfg.get('LOSS_REG_REDUCTION', 'mean') == 'mean':
+            # scene: [B,K]; agent: [B,K,A]
             denoising_error_per_scene = denoising_error_per_scene.mean(dim=-1)
             denoising_error_per_agent = denoising_error_per_agent.mean(dim=-1)
         elif self.cfg.get('LOSS_REG_REDUCTION', 'mean') == 'sum':
@@ -419,25 +450,31 @@ class FlowMatcher(nn.Module):
         else:
             raise ValueError(f"Unknown reduction method: {self.cfg.get('LOSS_REG_REDUCTION', 'mean')}")
 
+        # ---------- 组件选择（“赢家通吃” best-of-K），同时训练分类头 ----------
         if self.cfg.LOSS_NN_MODE == 'scene':
-            # scene-level selection
+            # 1) 在场景级上选择：对每个样本取使 scene 误差最小的那个K分支
             selected_components = denoising_error_per_scene.argmin(dim=1)  # [B]
+            # 取出对应k*的场景误差，作为回归损失基数
             loss_reg_b = denoising_error_per_scene.gather(1, selected_components[:, None]).squeeze(1)  		# [B]
 
+            # 分类头：预测哪个K是最佳（对A平均后为 [B,K]）
             cls_logits = denoiser_cls.mean(dim=-1)  # [B, K]
             loss_cls_b = F.cross_entropy(input=cls_logits, target=selected_components, reduction='none')	# [B]
         elif self.cfg.LOSS_NN_MODE == 'agent':
             # agent-level selection
+            # 2) 在agent级上选择：每个agent各自找最优k* ⇒ [B,A]
             selected_components = denoising_error_per_agent.argmin(dim=1)  # [B, A]
+            # 按k*提取每个agent的误差 ⇒ [B,A]
             loss_reg_b = denoising_error_per_agent.gather(1, selected_components[:, None, :]).squeeze(1)  	# [B, A]
+            # 再对A平均成 [B]
             loss_reg_b = loss_reg_b.mean(dim=-1)  # [B]
-
+            # 分类头：把 [B,K,A] 拉平为 [B*A,K]，每个agent各自做分类
             cls_logits = rearrange(denoiser_cls, 'b k a -> (b a) k')	# [B * A, K]
             cls_labels = selected_components.view(-1)					# [B * A]
             loss_cls_b = F.cross_entropy(input=cls_logits, target=cls_labels, reduction='none')	 # [B * A]
             loss_cls_b = loss_cls_b.view(B, A).mean(dim=-1)  	# [B]
         elif self.cfg.LOSS_NN_MODE == 'both':
-            # scene-level selection
+            # 3) 同时做场景级与agent级的选择，并线性组合
             selected_components = denoising_error_per_scene.argmin(dim=1)  # [B]
             loss_reg_b_scene = denoising_error_per_scene.gather(1, selected_components[:, None]).squeeze(1)  		# [B] 
 
@@ -445,24 +482,27 @@ class FlowMatcher(nn.Module):
             selected_components = denoising_error_per_agent.argmin(dim=1)  # [B, A]
             loss_reg_b = denoising_error_per_agent.gather(1, selected_components[:, None, :]).squeeze(1)  	# [B, A]
             loss_reg_b_agent = loss_reg_b.mean(dim=-1)  # [B]
+            # 线性权重 omega：场景级占比
             loss_reg_b = self.cfg.OPTIMIZATION.LOSS_WEIGHTS.get('omega', 1.0)  * loss_reg_b_scene + loss_reg_b_agent
 
-            ## dummy input for loss_cls_b
+            ## 分类损失占位（如未训练分类头）
             loss_cls_b = torch.zeros_like(loss_reg_b)
 
-
-        # loss computation
+        # ---------- 组装总损失 ----------
+        # 回归损失：按时间层级/噪声层级的权重 l_weight（通常来自 t 或路径调度）加权
+        # l_weight 需与 [B] 对齐（若是 [B,A] 也应在上面对应求均值后再乘）
         loss_reg = (loss_reg_b * l_weight).mean()  # scalar
-
+        # 分类损失：平均到 batch 标量
         loss_cls = loss_cls_b.mean()
-
+        # 各项权重
         weight_reg = self.cfg.OPTIMIZATION.LOSS_WEIGHTS.get('reg', 1.0)
         weight_cls = self.cfg.OPTIMIZATION.LOSS_WEIGHTS.get('cls', 1.0)
         weight_vel = self.cfg.OPTIMIZATION.LOSS_WEIGHTS.get('vel', 0.2)
-
+        # 最终总损失：回归 + 分类 + 速度正则
         loss = weight_reg * loss_reg.mean() + weight_cls * loss_cls.mean() + weight_vel * loss_reg_vel.mean()
 
-        # record the loss for each denoising level
+        # ---------- 分噪声级别(loss per level) 记录 ----------
+        # 记录不同 t（或噪声等级）的损失曲线，便于诊断FM在各时间的学习情况
         flag_reset = self.loss_buffer.record_loss(t, loss_reg_b.detach(), epoch_id=log_dict['cur_epoch'])
         if flag_reset:
             dict_loss_per_level = self.loss_buffer.get_average_loss()

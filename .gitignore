@@ -201,3 +201,9 @@ dmypy.json
 
 # Cython debug symbols
 cython_debug/
+
+data/rat/h10p20_1103/
+data/rat/h30p30_1103/
+data/rat/hist10pred20/rat_test.npy
+data/rat/hist10pred20/rat_train.npy
+data/rat/hist10pred20/rat_val.npy

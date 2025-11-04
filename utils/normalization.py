@@ -39,6 +39,22 @@ def unnormalize_min_max(t, min_val, max_val, a, b, identity=False):
         return (t - a) * (max_val - min_val)/(b - a) + min_val
 
 
+def unnormalize_mean_std(t, mean, std, identity=False):
+    '''
+    Unnormalize t from [a, b] range back to [min_val, max_val] range
+    Args:
+    t: input tensor
+    min_val: minimum value of t
+    max_val: maximum value of t
+    a: minimum value of the input range
+    b: maximum value of the input range
+    '''
+    if identity:
+        return t
+    else:
+        return t * std + mean
+
+
 def normalize_sqrt(traj_data, a, b):
     '''
     Normalize input tensor to [-1, 1] using square root.

@@ -27,7 +27,7 @@ def parse_config():
     parser.add_argument('--exp', default='', type=str, help='Experiment description for each run, name of the saving folder.')
 
     # Data configuration
-    parser.add_argument('--data_source', default='original', type=str, help='Data source for the experiment. Either be original or preprocessed ones from LED.')
+    parser.add_argument('--data_source', default='hist10pred20', type=str, help='Data source for the experiment. Either be hist10pred20 or preprocessed ones from LED.')
     parser.add_argument('--epochs', default=None, type=int, help='Override the number of epochs in the config file.')
     parser.add_argument('--batch_size', default=None, type=int, help='Override the batch size in the config file.')
     parser.add_argument('--data_dir', type=str, default='./data/eth_ucy', help='Directory where the data is stored.')
@@ -35,7 +35,7 @@ def parse_config():
     parser.add_argument('--n_test', type=int, default=None, help='Override the number testing scenes used.')
     parser.add_argument('--checkpt_freq', default=5, type=int, help='Override the checkpt_freq in the config file.')
     parser.add_argument('--max_num_ckpts', default=5, type=int, help='Override the max_num_ckpts in the config file.')
-    parser.add_argument('--data_norm', default='min_max', choices=['min_max', 'original', 'sqrt'], help='Normalization method for the data.')
+    parser.add_argument('--data_norm', default='min_max', choices=['min_max', 'hist10pred20', 'sqrt'], help='Normalization method for the data.')
     parser.add_argument('--subset', type=str, required=True, choices=['eth', 'hotel', 'univ', 'zara1', 'zara2'], help='Trajectory subset to run experiment')
     parser.add_argument('--rotate', default=False, action='store_true', help="Whether to rotate the trajectories in the dataset")
     parser.add_argument('--rotate_time_frame', type=int, default=0, help='Index of time frames to rotate the trajectories.')

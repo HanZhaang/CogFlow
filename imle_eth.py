@@ -33,7 +33,7 @@ def parse_config():
     parser.add_argument('--save_samples', default=False, action='store_true', help='Save the samples during evaluation.')
 
     # Data configuration
-    parser.add_argument('--data_source', type=str, default='original', choices=['original', 'LED'], help='Data source for the training data.')
+    parser.add_argument('--data_source', type=str, default='hist10pred20', choices=['hist10pred20', 'LED'], help='Data source for the training data.')
     parser.add_argument('--epochs', default=None, type=int, help='Override the number of epochs in the config file.')
     parser.add_argument('--batch_size', default=None, type=int, help='Override the batch size in the config file.')
     parser.add_argument('--data_dir', type=str, default='./data/eth_ucy', help='Directory where the data is stored.')

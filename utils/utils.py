@@ -1,5 +1,4 @@
 import os
-import git 
 import logging
 import shutil
 import torch

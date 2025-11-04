@@ -21,7 +21,7 @@ from ema_pytorch import EMA
 from tqdm.auto import tqdm
 
 from utils.utils import set_random_seed
-from utils.normalization import unnormalize_min_max, unnormalize_sqrt
+from utils.normalization import unnormalize_min_max, unnormalize_sqrt, unnormalize_mean_std
 
 
 # helpers functions
@@ -238,33 +238,52 @@ class Trainer(object):
 
         # init
         accelerator = self.accelerator
+        # 取出 HuggingFace Accelerate 的加速器对象（负责混精、分布式、梯度裁剪等）
         self.logger.info('training start')
+        # 打印“开始训练”的日志
         iter_per_epoch = self.train_num_steps // self.cfg.OPTIMIZATION.NUM_EPOCHS
+        # 依据设定的总训练步数 train_num_steps 与 epoch 数，估算 每个 epoch 的迭代步数（用于记录/命名 checkpoint）
 
         with tqdm(initial = self.step, total = self.train_num_steps, disable = not accelerator.is_main_process) as pbar:
             while self.step < self.train_num_steps:
+                # 外层 while：以 “总步数” 为上限的训练循环（不是按 epoch 计，而是按 step 计）
                 # init per-iteration variables
-                total_loss = 0.
-                self.denoiser.train()
-                self.ema.ema_model.train()
 
+                # 统计当前“梯度累积窗口内”的损失总和（便于日志打印）
+                total_loss = 0.
+                # 切换 教师/当前模型（这里命名为 denoiser）为训练模式
+                self.denoiser.train()
+                # EMA 模型也切到训练模式（某些层有 train/eval 行为差异时保持一致）
+                self.ema.ema_model.train()
+                # 梯度累积：在一次优化器 step() 前，累积若干个小批次的梯度，以实现更大的“等效 batch size”。
                 for _ in range(self.gradient_accumulate_every):
+                    # 从数据迭代器 self.dl 取下一个 batch，并搬到目标设备（GPU/TPU）
+                    # 构建一个dict保存数据键值对
                     data = {k : v.to(self.device) for k, v in next(self.dl).items()}
-                    
+                    # 记录当前处于第几个 epoch（用 step 反推），用于传给模型内部记录或损失项分支控制等。
                     log_dict = {'cur_epoch': self.step // iter_per_epoch}
 
                     if self.cfg.get('perturb_ctx', 0.0):
                         # used in SDD dataset
+                        # 为每个样本生成一个标量缩放 scale_ ~ N(1, σ)，放大或缩小“历史轨迹的原始尺度”，增强鲁棒性/泛化。
                         bs = data['past_traj'].shape[0]
                         scale_ = torch.randn((bs), device=self.device) * self.cfg.perturb_ctx + 1
+                        # 只对 past_traj_original_scale 进行缩放，不改变标准化后的张量（通常模型前向用的是标准化值）
                         data['past_traj_original_scale'] = data['past_traj_original_scale'] * scale_[:, None, None, None]
 
                     # compute the loss
+                    # 混合精度前向（由 Accelerate 统一管理）：节省显存、提升速度。
                     with self.accelerator.autocast():
+                        # loss：总损失（包含下列项加权和）
+                        # loss_reg：回归项（如与 GT 轨迹的 L2/L1 或 IMLE/Chamfer 的“最近邻”回归）
+                        # loss_cls：分类/互斥项（K-shot 多模态分支的“哪一条更接近 GT”的分类或分散正则）
+                        # loss_vel：速度/平滑正则（鼓励速度场/轨迹的时间一致性）
                         loss, loss_reg, loss_cls, loss_vel = self.denoiser(data, log_dict)
+                        # 由于用 梯度累积，把 loss 除以 gradient_accumulate_every，保证累计后等价于一个大 batch
                         loss = loss / self.gradient_accumulate_every
+                        # total_loss 用于进度条显示（统计这次累积窗口的损失之和）
                         total_loss += loss.item()
-
+                    # 由 Accelerate 统一实现 混精反传（兼容多卡/TPU/零冗余优化器等）
                     self.accelerator.backward(loss)
 
                     # log to tensorboard
@@ -274,19 +293,18 @@ class Trainer(object):
                         self.tb_log.add_scalar('train/loss_cls', loss_cls.item(), self.step)
                         self.tb_log.add_scalar('train/loss_vel', loss_vel.item(), self.step)
                         self.tb_log.add_scalar('train/learning_rate', self.opt.param_groups[0]["lr"], self.step)
-
-                       
-                    
+                # 以 self.step 作为横坐标（全局 step）
                 pbar.set_description(f'total loss: {total_loss:.4f}, loss_reg: {loss_reg:.4f}, loss_cls: {loss_cls:.4f}, loss_vel: {loss_vel:.4f}, lr: {self.opt.param_groups[0]["lr"]:.6f}')
-
+                # 更新进度条的文本：显示这次梯度累积窗口的损失统计与当前 LR。
                 accelerator.wait_for_everyone()
                 accelerator.clip_grad_norm_(self.denoiser.parameters(), self.cfg.OPTIMIZATION.GRAD_NORM_CLIP)
-
+                # 优化器更新参数，并清空梯度（配合上面的梯度累积，这里只在一个“累积窗口”后调用一次）
                 self.opt.step()
                 self.opt.zero_grad()
-
+                # 再次同步，确保更新后的参数在各进程一致。
                 accelerator.wait_for_everyone()
-
+                # 仅主进程更新 EMA（Exponential Moving Average） 权重
+                # EMA 的模型用于评估与生成，通常更平滑、泛化更好。
                 if accelerator.is_main_process:
                     self.ema.update()
                     # checkpt test and save the best validation model
@@ -329,6 +347,7 @@ class Trainer(object):
         ade_frames: int
         fde_frame: int
         '''
+        print("dis shape ADE = {}".format(distances.shape))
         ade_best = (distances[..., :end_frame]).mean(dim=-1).min(dim=-1).values.sum(dim=0)
         fde_best = (distances[..., end_frame-1]).min(dim=-1).values.sum(dim=0)
         ade_avg = (distances[..., :end_frame]).mean(dim=-1).mean(dim=-1).sum(dim=0)
@@ -344,6 +363,7 @@ class Trainer(object):
         ade_frames: int
         fde_frame: int
         '''
+        print("dis shape JADE = {}".format(distances.shape))
         jade_best = (distances[..., :end_frame]).mean(dim=-1).sum(dim=0).min(dim=-1).values
         jfde_best = (distances[..., end_frame-1]).sum(dim=0).min(dim=-1).values
         jade_avg = (distances[..., :end_frame]).mean(dim=-1).sum(dim=0).mean(dim=0)
@@ -420,12 +440,17 @@ class Trainer(object):
         pred_traj_at_t = rearrange(pred_traj_at_t, 'b t k a (f d) -> (b a) t k f d', f=self.cfg.future_frames)[...,0:2]  # [B, k_preds, 11, 40] -> [B * 11, k_preds, 20, 2]
 
         if self.cfg.get('data_norm', None) == 'min_max':
-            pred_traj = unnormalize_min_max(pred_traj, self.cfg.fut_traj_min, self.cfg.fut_traj_max, -1, 1) 
-            pred_traj_at_t = unnormalize_min_max(pred_traj_at_t, self.cfg.fut_traj_min, self.cfg.fut_traj_max, -1, 1)
+            # pred_traj = unnormalize_min_max(pred_traj, self.cfg.fut_traj_min, self.cfg.fut_traj_max, -1, 1)
+            # pred_traj_at_t = unnormalize_min_max(pred_traj_at_t, self.cfg.fut_traj_min, self.cfg.fut_traj_max, -1, 1)
+            pred_traj = unnormalize_mean_std(pred_traj, self.cfg.stats["fut_mean"], self.cfg.stats["fut_std"],
+                                                     1)  # [B, K, A, T, D]
+            pred_traj_at_t = unnormalize_mean_std(pred_traj_at_t, self.cfg.stats["fut_mean"],
+                                                   self.cfg.stats["fut_std"], 1)  # [B, K, A, T, D]
+
         elif self.cfg.get('data_norm', None) == 'sqrt':
             pred_traj = unnormalize_sqrt(pred_traj, self.sqrt_a_, self.sqrt_b_)
             pred_traj_at_t = unnormalize_sqrt(pred_traj_at_t, self.sqrt_a_, self.sqrt_b_)
-        elif self.cfg.get('data_norm', None) == 'original':
+        elif self.cfg.get('data_norm', None) == 'hist10pred20':
             pass
         else:
             raise NotImplementedError(f'Data normalization [{self.cfg.data_norm}] is not implemented yet.')
@@ -526,8 +551,8 @@ class Trainer(object):
             dl = self.val_loader
       
         ### setup the performance dict
-        performance = {'FDE_min': [0,0,0,0], 'ADE_min': [0,0,0,0], 'FDE_avg': [0,0,0,0], 'ADE_avg': [0,0,0,0], 'A_var': [0,0,0,0], 'F_var': [0,0,0,0], 'MASD': [0,0,0,0]}
-        performance_joint = {'JFDE_min': [0,0,0,0], 'JADE_min': [0,0,0,0], 'JFDE_avg': [0,0,0,0], 'JADE_avg': [0,0,0,0]}
+        performance = {'FDE_min': [0,0,0,0,0,0], 'ADE_min': [0,0,0,0,0,0], 'FDE_avg': [0,0,0,0,0,0], 'ADE_avg': [0,0,0,0,0,0], 'A_var': [0,0,0,0,0,0], 'F_var': [0,0,0,0,0,0], 'MASD': [0,0,0,0,0,0]}
+        performance_joint = {'JFDE_min': [0,0,0,0,0,0], 'JADE_min': [0,0,0,0,0,0], 'JFDE_avg': [0,0,0,0,0,0], 'JADE_avg': [0,0,0,0,0,0]}
         num_trajs = 0
         t_seq_ls, y_t_seq_ls, y_pred_data_ls, x_data_ls = [], [], [], []
         ### record running time
@@ -558,8 +583,11 @@ class Trainer(object):
             elif self.cfg.dataset == 'sdd':
                 freq = 3
                 factor_time = 1.2
-                
-            for time in range(1, 5):
+            elif self.cfg.dataset == "rat":
+                freq = 5
+                factor_time = 0.3
+
+            for time in range(1, 7):
                 ade, fde, ade_avg, fde_avg = self.compute_ADE_FDE(distances, int(time * freq))
                 jade, jfde, jade_avg, jfde_avg = self.compute_JADE_JFDE(distances, int(time * freq)) 
                 a_var, f_var = self.compute_avar_fvar(pred_traj, int(time * freq))
@@ -576,7 +604,7 @@ class Trainer(object):
                 performance['F_var'][time - 1] += f_var.item()
                 performance['MASD'][time - 1] += masd.item()
 
-            assert freq * 4 == self.cfg.future_frames, 'Freq {} and number of frames {} do not match'.format(freq, self.cfg.future_frames)
+            assert freq * 6 == self.cfg.future_frames, 'Freq {} and number of frames {} do not match'.format(freq, self.cfg.future_frames)
              
             num_trajs += fut_traj.shape[0]
 

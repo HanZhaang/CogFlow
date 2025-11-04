@@ -90,7 +90,7 @@ def rotate_traj(past_rel, future_rel, past_abs, agents=2, rotate_time_frame=0, s
 
 
 class ETHDataset(object):
-    def __init__(self, cfg, training=True, data_dir = None, subset = None, rotate_time_frame=0, imle=False, type='original'):
+    def __init__(self, cfg, training=True, data_dir = None, subset = None, rotate_time_frame=0, imle=False, type='hist10pred20'):
         ### LED version of preprocessed data
         if type == 'LED':
             data_file_path = os.path.join(data_dir, type, '{:s}_data_{:s}.npy'.format(subset, 'train' if training else 'test'))
@@ -100,7 +100,7 @@ class ETHDataset(object):
             all_num = np.load(num_file_path)
             self.all_data = torch.Tensor(all_data)
             self.all_num = torch.Tensor(all_num) 
-        elif type == 'original':
+        elif type == 'hist10pred20':
             ### Original version of preprocessed data
             data_file_path = os.path.join(data_dir, type, subset,'{:s}_{:s}.pkl'.format(subset, 'train' if training else 'test'))
             all_data = pickle.load(open(data_file_path, 'rb'))
@@ -139,7 +139,7 @@ class ETHDataset(object):
             cfg.past_traj_max = past_traj.max()
             cfg.past_traj_min = past_traj.min()
         
-        ### record the original to avoid numerical errors
+        ### record the hist10pred20 to avoid numerical errors
         self.past_traj_original_scale = past_traj
         self.fut_traj_original_scale = fut_traj
    
@@ -147,7 +147,7 @@ class ETHDataset(object):
         if cfg.data_norm == 'min_max':
             self.past_traj = normalize_min_max(past_traj, cfg.past_traj_min, cfg.past_traj_max, -1, 1).contiguous()
             self.fut_traj = normalize_min_max(fut_traj, cfg.fut_traj_min, cfg.fut_traj_max, -1, 1).contiguous()
-        elif cfg.data_norm == 'original':
+        elif cfg.data_norm == 'hist10pred20':
             self.past_traj = past_traj
             self.fut_traj = fut_traj
 

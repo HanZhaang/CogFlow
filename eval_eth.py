@@ -32,7 +32,7 @@ def parse_config():
 	parser.add_argument('--eval_on_train', default=False, action='store_true', help='Evaluate the model on the training set.')
 
 	# Data configuration
-	parser.add_argument('--data_source', default='original', type=str, help='Data source for the experiment. Either be original or preprocessed ones from LED.')
+	parser.add_argument('--data_source', default='hist10pred20', type=str, help='Data source for the experiment. Either be hist10pred20 or preprocessed ones from LED.')
 	parser.add_argument('--batch_size', default=None, type=int, help='Override the batch size in the config file.')
 	parser.add_argument('--data_dir', type=str, default='./data/eth_ucy', help='Directory where the data is stored.')
 	parser.add_argument('--n_train', type=int, default=32500, help='Number training scenes used.')

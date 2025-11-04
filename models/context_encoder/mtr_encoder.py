@@ -60,6 +60,21 @@ class MTREncoder(nn.Module):
                                                 batch_first=True)
         self.transformer_encoder = nn.TransformerEncoder(self.layer, num_layers=self.model_cfg.NUM_ATTN_LAYERS)
         self.num_out_channels = dim
+
+        self.max_agents = 8
+        self.agent_index_embed = nn.Embedding(self.max_agents, dim)
+
+        # 定义关键点类型数，例如：0=后爪, 1=前爪, 2=头颈, 3=脊柱, 4=尾根
+        self.num_agent_types = 5
+        self.agent_type_embed = nn.Embedding(self.num_agent_types, dim)
+
+        # 关键点到类型的映射（按你的索引顺序，示例：右/左后爪, 右/左前爪, 尾根, 头, 颈, 脊柱）
+        # 例如： [RR_paw, LR_paw, RF_paw, LF_paw, tail_root, head, neck, spine]
+        self.register_buffer(
+            "kp_type_ids",
+            torch.tensor([0, 0, 1, 1, 4, 2, 2, 3], dtype=torch.long)  # len=8
+        )
+
     ### polyline encoder MLP
     def build_polyline_encoder(self, in_channels, hidden_dim, num_layers, num_pre_layers=1, out_channels=None):
         ret_polyline_encoder = polyline_encoder.PointNetPolylineEncoder(
@@ -71,18 +86,28 @@ class MTREncoder(nn.Module):
         )
         return ret_polyline_encoder
     
-    def agent_query_embedding(self, index):
-        '''
-        Distinguish between team one, team two and ball. High level PE
-        One team is at index 0-5
-        Another team is at index 5-10
-        Ball is at index 10
-        '''
-        team_one_query = self.team_one_query_embedding(index)
-        team_two_query = self.team_two_query_embedding(index)
-        ball_query = self.ball_query_embedding(index)
-        agent_query = torch.cat([team_one_query.repeat(5,1), team_two_query.repeat(5,1), ball_query], dim=0)
-        return agent_query # [A, D]
+    # def agent_query_embedding(self, index):
+    #     '''
+    #     Distinguish between team one, team two and ball. High level PE
+    #     One team is at index 0-5
+    #     Another team is at index 5-10
+    #     Ball is at index 10
+    #     '''
+    #     team_one_query = self.team_one_query_embedding(index)
+    #     team_two_query = self.team_two_query_embedding(index)
+    #     ball_query = self.ball_query_embedding(index)
+    #     agent_query = torch.cat([team_one_query.repeat(5,1), team_two_query.repeat(5,1), ball_query], dim=0)
+    #     return agent_query # [A, D]
+
+    def agent_query_embedding(self, A, device):
+        idx = torch.arange(A, device=device)  # [A]
+        index_q = self.agent_index_embed(idx)  # [A, D]
+
+        # 截断以匹配 A（以防未来支持可变 agent 数）
+        type_ids = self.kp_type_ids[:A].to(device)  # [A]
+        type_q = self.agent_type_embed(type_ids)  # [A, D]
+
+        return index_q + type_q  # [A, D]
 
 
     def forward(self, past_traj):
@@ -92,12 +117,19 @@ class MTREncoder(nn.Module):
         """
         past_traj_mask = torch.ones_like(past_traj[..., 0], dtype=torch.bool).to(past_traj.device)
         obj_polylines_feature = self.agent_polyline_encoder(past_traj, past_traj_mask)  # (num_center_objects, num_objects, C)
+        A = obj_polylines_feature.shape[1]
+        device = past_traj.device
 
         ### use positional encoding pm A
-        pos_encoding = self.pos_encoding(torch.arange(obj_polylines_feature.shape[1]).to(past_traj.device)) #[A, D]
+        # pos_encoding = self.pos_encoding(torch.arange(obj_polylines_feature.shape[1]).to(past_traj.device)) #[A, D]
+        pos_encoding = self.pos_encoding(torch.arange(A, device=device))
 
         ### enforce another positional encoding on A earlier here. Disable this before running the ablation
-        agent_query = self.agent_query_embedding(torch.arange(1).to(past_traj.device)) #[A, D]
+        # agent_query = self.agent_query_embedding(torch.arange(1).to(past_traj.device)) #[A, D]
+        agent_query = self.agent_query_embedding(A, device)
+
+        # print("agent_query shape = {}".format(agent_query.shape))
+        # print("pos_encoding shape = {}".format(pos_encoding.shape))
         pos_encoding = self.mlp_pe(torch.cat([agent_query, pos_encoding], dim=-1)) #[A, D]
         # pos_encoding = self.mlp_pe(agent_query) #[A, D]
 

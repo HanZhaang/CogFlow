@@ -98,13 +98,14 @@ class NBADatasetMinMax(Dataset):
 
         if not overfit:
             if training:
-                data_root = os.path.join(data_dir, 'original/nba_train.npy')
+                data_root = os.path.join(data_dir, 'hist10pred20/nba_train.npy')
             else:
-                data_root = os.path.join(data_dir, 'original/nba_test.npy')
+                data_root = os.path.join(data_dir, 'hist10pred20/nba_test.npy')
         else:
-            data_root = os.path.join(data_dir, 'original/nba_train.npy')
+            data_root = os.path.join(data_dir, 'hist10pred20/nba_train.npy')
 
         self.trajs_raw = np.load(data_root) #(N,15,11,2)
+
         self.trajs = self.trajs_raw / traj_scale_total
         if training:
             self.trajs = self.trajs[:num_scenes]
@@ -114,7 +115,6 @@ class NBADatasetMinMax(Dataset):
         ### Overfit test 
         if overfit:
             self.trajs = self.trajs[:num_scenes]
-        
 
         self.data_len = len(self.trajs)
         print("Size of the dataset: {} in {} mode".format(self.data_len, 'Training' if training else 'Testing'))
@@ -144,7 +144,7 @@ class NBADatasetMinMax(Dataset):
             cfg.past_traj_max = past_traj.max()
             cfg.past_traj_min = past_traj.min()
         
-        ### record the original to avoid numerical errors
+        ### record the hist10pred20 to avoid numerical errors
         self.past_traj_original_scale = past_traj
         self.fut_traj_original_scale = fut_traj
         

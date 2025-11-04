@@ -326,9 +326,9 @@ def main():
 	args = parse_config()
 
 	cfg, logger, tb_log = init_basics(args)
-
+	# 构建数据加载器
 	train_loader, test_loader = build_data_loader(cfg, args)
-
+	# 构建模型网络
 	denoiser = build_network(cfg, args, logger)
 
 	"""Train the model"""
