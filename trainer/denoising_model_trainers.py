@@ -408,7 +408,7 @@ class Trainer(object):
         self.logger.info(f'testing start with the {mode} ckpt')
 
         set_random_seed(42)
-
+        print("final path = {}".format(os.path.join(self.cfg.model_dir, 'checkpoint_last.pt')))
         if mode == 'last':
             ckpt_states = torch.load(os.path.join(self.cfg.model_dir, 'checkpoint_last.pt'), map_location=self.device, weights_only=True)
         else:
@@ -461,7 +461,7 @@ class Trainer(object):
     def save_latent_states(self, t_seq_ls, y_t_seq_ls, y_pred_data_ls, x_data_ls, pred_score_ls, file_name):
         self.logger.info("Begin to save the denoising samples...")
 
-        if self.cfg.dataset in ['nba', 'sdd', 'eth_ucy']:
+        if self.cfg.dataset in ['nba', 'sdd', 'eth_ucy', 'rat']:
             keys_to_save = ['past_traj', 'fut_traj', 'past_traj_original_scale', 'fut_traj_original_scale', 'fut_traj_vel']
         else:
             raise NotImplementedError(f'Dataset [{self.cfg.dataset}] is not implemented yet.')
@@ -639,7 +639,7 @@ class Trainer(object):
         cur_epoch = self.step // (self.train_num_steps // self.cfg.OPTIMIZATION.NUM_EPOCHS)
         if not testing_mode: 
             self.logger.info(f'{self.step}/{self.train_num_steps}, running inference on {num_trajs} agents (trajectories)')
-            for time in range(4):
+            for time in range(6):
                 if self.tb_log:
                     self.tb_log.add_scalar(f'eval_{status}/ADE_min_{time+1}s', performance['ADE_min'][time]/num_trajs, cur_epoch)
                     self.tb_log.add_scalar(f'eval_{status}/FDE_min_{time+1}s', performance['FDE_min'][time]/num_trajs, cur_epoch)
@@ -651,29 +651,29 @@ class Trainer(object):
                     self.tb_log.add_scalar(f'eval_{status}/JFDE_avg_{time+1}s', performance_joint['JFDE_avg'][time]/num_trajs, cur_epoch)
 
         # print out the performance
-        for time in range(4):
+        for time in range(6):
             self.logger.info('--ADE_min({:.1f}s): {:.7f}\t--FDE_min({:.1f}s): {:.7f}'.format(
                 (time+1)*factor_time, performance['ADE_min'][time]/num_trajs, time+1, performance['FDE_min'][time]/num_trajs))
 
       
-        for time in range(4):
+        for time in range(6):
             self.logger.info('--ADE_avg({:.1f}s): {:.7f}\t--FDE_avg({:.1f}s): {:.7f}'.format(
                 time+1, performance['ADE_avg'][time]/num_trajs, time+1, performance['FDE_avg'][time]/num_trajs))
 
-        for time in range(4):
+        for time in range(6):
             self.logger.info('--AVar({:.1f}s): {:.7f}\t--FVar({:.1f}s): {:.7f}'.format(
                 time+1, performance['A_var'][time]/num_trajs, time+1, performance['F_var'][time]/num_trajs))
         
-        for time in range(4):
+        for time in range(6):
             self.logger.info('--MASD({:.1f}s): {:.7f}'.format(
                 time+1, performance['MASD'][time]/num_trajs))
             
         # print out the joint performance
-        for time in range(4):
+        for time in range(6):
             self.logger.info('--JADE_min({:.1f}s): {:.7f}\t--JFDE_min({:.1f}s): {:.7f}'.format(
                 time+1, performance_joint['JADE_min'][time]/num_trajs, time+1, performance_joint['JFDE_min'][time]/num_trajs))
         
-        for time in range(4):
+        for time in range(6):
             self.logger.info('--JADE_avg({:.1f}s): {:.7f}\t--JFDE_avg({:.1f}s): {:.7f}'.format(
                 time+1, performance_joint['JADE_avg'][time]/num_trajs, time+1, performance_joint['JFDE_avg'][time]/num_trajs))
 

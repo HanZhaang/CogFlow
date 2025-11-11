@@ -8,6 +8,7 @@ from .motion_decoder.mtr_decoder import modulate
 from .utils.common_layers import build_mlps
 from einops import repeat, rearrange
 from models.context_encoder.mtr_encoder import SinusoidalPosEmb
+from models.context_encoder.condition_encoder import ConditionEncoder
 
 
 class MotionTransformer(nn.Module):
@@ -23,6 +24,20 @@ class MotionTransformer(nn.Module):
 
         # （1）上下文编码器：把历史轨迹/邻居信息编码成每个 agent 的上下文向量
         self.context_encoder = build_context_encoder(self.model_cfg.CONTEXT_ENCODER, use_pre_norm)
+
+        # update: 条件/指令编码器 + 注入层
+        self.cond_encoder = ConditionEncoder(
+            d_hist=self.model_cfg.get('COND_D_HIST', 0),  # 如 Δyaw/κ/speed 等
+            d_cue=self.model_cfg.get('COND_D_CUE', 0),  # 刺激等
+            d_goal=self.model_cfg.get('COND_D_GOAL', 0),  # 相对目标位姿等
+            d_zd=self.model_cfg.get('COND_D_ZD', 0),  # 离散模式 logits/onehot
+            d_zc=self.model_cfg.get('COND_D_ZC', 0),  # 连续潜变量
+            d_model=self.dim
+        )
+        # 最小侵入：一对 FiLM 调制 + 一个线性投影用于拼接
+        self.cond_proj       = nn.Linear(self.dim, self.dim)
+        self.cond_film_gamma = nn.Linear(self.dim, self.dim)
+        self.cond_film_beta  = nn.Linear(self.dim, self.dim)
 
         # （2）“位置编码”的三件套：K 维query索引、A维agent索引、以及一个事后融合MLP
         self.motion_query_embedding = nn.Embedding(self.model_cfg.NUM_PROPOSED_QUERY, self.dim)
@@ -62,8 +77,13 @@ class MotionTransformer(nn.Module):
 
         # （6）把三路信息拼接后（context、y_emb、t_emb）先做一个融合，再送 decoder
         dim_decoder = self.model_cfg.MOTION_DECODER.D_MODEL
+        # ⚠️ 因为要把 cond 拼到融合前，所以把 in_features + self.dim
+        in_fuse = (self.dim            # encoder_out
+                   + (self.dim*1)      # time_dim
+                   + self.dim          # y_emb
+                   + self.dim)         # cond_vec
         self.init_emb_fusion_mlp = nn.Sequential(
-            nn.Linear(self.dim + time_dim + self.dim, self.dim),
+            nn.Linear(in_fuse, self.dim),
             nn.LayerNorm(self.dim),
             nn.ReLU(),
             nn.Linear(self.dim, dim_decoder),
@@ -136,8 +156,17 @@ class MotionTransformer(nn.Module):
         # 扩到 [B, K, A, D] 与 proposal 维对齐
         encoder_out_batch = repeat(encoder_out, 'b a d -> b k a d', k=K, a=A) 	# [B, K, A, D]
 
+        # update: 1.5 条件编码
+        cond_vec = self.cond_encoder(x_data)  # [B, dim]
+        cond_vec = self.cond_proj(cond_vec)  # 线性整形
+        cond_bka = repeat(cond_vec, 'b d -> b k a d', b=B, k=K, a=A)  # 对齐 (K,A)
+
         # （2）把 y（T*D）嵌入到通道维：得到每个 (B,K,A) 的 token
         y_emb = self.noisy_y_mlp(y)  	# [B, K, A, D]
+
+        # update:
+        gamma, beta = self.cond_film_gamma(cond_bka), self.cond_film_beta(cond_bka)
+        y_emb = gamma * y_emb + beta
 
         # （3）时间嵌入：若方法是 fm，则把 t 放大到更大的数值（经验 trick），再过 time_mlp
         time_ = time
@@ -175,7 +204,10 @@ class MotionTransformer(nn.Module):
 
 
         # （7）与上下文、时间一起融合；再加一次 PE 后交给 motion decoder
-        emb_fusion = self.init_emb_fusion_mlp(torch.cat((encoder_out_batch, y_emb, t_emb_batch), dim=-1))	 	# [B, K, A, D]
+        # update
+        emb_in = torch.cat((encoder_out_batch, y_emb, t_emb_batch, cond_bka), dim=-1)
+        # emb_in = torch.cat((encoder_out_batch, y_emb, t_emb_batch), dim=-1)
+        emb_fusion = self.init_emb_fusion_mlp(emb_in)	 	# [B, K, A, D]
         query_token = self.post_pe_cat_mlp(self.apply_PE(emb_fusion, k_pe_batch, a_pe_batch)) 								# [B, K, A, D]
         readout_token = self.motion_decoder(query_token, t_emb)													# [B, K, A, D]	
 
@@ -184,6 +216,7 @@ class MotionTransformer(nn.Module):
         denoiser_cls = self.cls_head(readout_token).squeeze(-1) 						# [B, K, A]
 
         return denoiser_x, denoiser_cls
+
 
 
 class IMLETransformer(nn.Module):
@@ -262,7 +295,6 @@ class IMLETransformer(nn.Module):
         # init noise embeddings
         noise = torch.randn((B, M, D), device=device)       # [B, M, D]
         noise_emb = self.noisy_vec_mlp(noise)  	            # [B, M, D]
-
 
         if self.cfg.objective == 'set':
             encoder_out_batch = repeat(encoder_out, 'b a d -> b m k a d', m=M, k=K, a=A)    # [B, M, K, A, D]
