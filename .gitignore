@@ -207,3 +207,6 @@ data/rat/h30p30_1103/
 data/rat/hist10pred20/rat_test.npy
 data/rat/hist10pred20/rat_train.npy
 data/rat/hist10pred20/rat_val.npy
+
+cfg/rat/log/
+cfg/rat/models/

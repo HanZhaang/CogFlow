@@ -37,6 +37,8 @@ MODEL:
     USE_PE_QUERY: True
     USE_PE_AGENT: True
 
+    COND_D_CUE: 7
+    COND_D_HIST: 7
     CONTEXT_ENCODER:
         NAME: MTREncoder
         NUM_OF_ATTN_NEIGHBORS: 8

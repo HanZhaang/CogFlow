@@ -4,17 +4,20 @@ import numpy as np
 import pickle
 import glob
 from torch.utils.data import Dataset
+import torch.nn.functional as F
 from utils.normalization import normalize_min_max, unnormalize_min_max, normalize_sqrt, unnormalize_sqrt
 import torch
 from utils.utils import rotate_trajs_x_direction
 
 def seq_collate_rat(batch):
-    (past_traj, fut_traj, past_traj_orig, fut_traj_orig, traj_vel) = zip(*batch)
+    (past_traj, fut_traj, past_traj_orig, fut_traj_orig, traj_vel, hist_feats, cond_cue) = zip(*batch)
     pre_motion_3D = torch.stack(past_traj,dim=0)
     fut_motion_3D = torch.stack(fut_traj,dim=0)
     pre_motion_3D_orig = torch.stack(past_traj_orig, dim=0)
     fut_motion_3D_orig = torch.stack(fut_traj_orig, dim=0)
     fut_traj_vel = torch.stack(traj_vel, dim=0)
+    cond_cue = torch.stack(cond_cue, dim=0)
+    hist_feats = torch.stack(hist_feats, dim=0)
 
     batch_size, vertical_size = pre_motion_3D.shape[0], pre_motion_3D.shape[1] ### bt
     traj_mask = torch.zeros(batch_size * vertical_size, batch_size * vertical_size)
@@ -27,7 +30,9 @@ def seq_collate_rat(batch):
         'past_traj_original_scale': pre_motion_3D_orig,
         'fut_traj_original_scale': fut_motion_3D_orig,
         'traj_mask': traj_mask,
-        'fut_traj_vel': fut_traj_vel,  
+        'fut_traj_vel': fut_traj_vel,
+        'hist_feats': hist_feats,
+        'cond_cue': cond_cue
     }
 
     return data 
@@ -79,25 +84,36 @@ class RatDatasetMinMax(Dataset):
         self.imle     = imle
         self.data_norm = data_norm
 
+        self.dt = 1/18
+        self.head_idx = 5
+        self.neck_idx = 6
+
         if not overfit:
             if training:
                 data_root = os.path.join(data_dir, 'h30p30_1103/rat_train.npy')
+                cmd_root = os.path.join(data_dir, 'h30p30_1103/rat_train_cmd.npy')
             else:
-                data_root = os.path.join(data_dir, 'h30p30_1103/rat_val.npy')
+                data_root = os.path.join(data_dir, 'h30p30_1103/rat_test.npy')
+                cmd_root = os.path.join(data_dir, 'h30p30_1103/rat_test_cmd.npy')
         else:
             data_root = os.path.join(data_dir, 'h30p30_1103/rat_train.npy')
+            cmd_root = os.path.join(data_dir, 'h30p30_1103/rat_train_cmd.npy')
 
         self.trajs_raw = np.load(data_root) #(N,15,11,2)
+        self.cmd_raw = np.load(cmd_root)
 
         # self.trajs = self.trajs_raw / traj_scale_total
         if training:
             self.trajs = self.trajs_raw[:num_scenes]
+            self.cmd = self.cmd_raw[:num_scenes]
         else:
             self.trajs = self.trajs_raw[:test_scenes]
+            self.cmd = self.cmd_raw[:test_scenes]
 
         ### Overfit test
         if overfit:
             self.trajs = self.trajs_raw[:num_scenes]
+            self.cmd = self.cmd_raw[:num_scenes]
 
         self.data_len = len(self.trajs)
         self.traj_abs = torch.from_numpy(self.trajs).float()  # [N, T, V, 2]
@@ -178,17 +194,168 @@ class RatDatasetMinMax(Dataset):
             # ...（可后续再开）
             pass
 
+    @torch.no_grad()
+    def compute_hist_feats(self,
+                           past_abs_xy: torch.Tensor,  # [V, T_h, 2]  原尺度位置（建议 cm）
+                           dt: float = 1 / 10,  # 真实采样间隔（秒）
+                           head_idx: int = 0,
+                           neck_idx: int = 1,
+                           ) -> torch.Tensor:
+        """
+        返回 hist_feats: [V, T_h, C_h]
+        C_h 顺序:
+          [ vel_x, vel_y, speed, acc, yaw, d_yaw, kappa ]
+        均保证时间维长度 == T_h
+        """
+        device = past_abs_xy.device
+        V, T, _ = past_abs_xy.shape
+
+        # 1) 每关键点速度/加速度（长度 T）
+        vel = _time_derivative(past_abs_xy, dt)  # [V, T, 2]
+        acc_vec = _time_derivative(vel, dt)  # [V, T, 2]
+        speed = vel.norm(dim=-1, keepdim=True)  # [V, T, 1]
+        acc = acc_vec.norm(dim=-1, keepdim=True)  # [V, T, 1]
+
+        # 2) 用 head-neck 估计 yaw / d_yaw / kappa（长度 T）
+        head = past_abs_xy[head_idx]  # [T, 2]
+        neck = past_abs_xy[neck_idx]  # [T, 2]
+        hn = head - neck  # [T, 2]
+        yaw = torch.atan2(hn[..., 1], hn[..., 0])  # [T]
+        # wrap 到 [-pi, pi]
+        yaw = (yaw + torch.pi) % (2 * torch.pi) - torch.pi
+        d_yaw = _time_derivative(yaw, dt)  # [T]
+        d_yaw = (d_yaw + torch.pi) % (2 * torch.pi) - torch.pi
+
+        # 3) 曲率 kappa（用 head 轨迹，长度 T）
+        v = _time_derivative(head, dt)  # [T, 2]
+        a = _time_derivative(v, dt)  # [T, 2]
+        cross = (v[..., 0] * a[..., 1] - v[..., 1] * a[..., 0]).abs()  # |x'y'' - y'x''|
+        denom = (v.pow(2).sum(dim=-1).clamp_min(1e-6)).pow(1.5)  # (x'^2 + y'^2)^(3/2)
+        kappa = cross / denom  # [T]
+
+        # 4) 广播到每个关键点（保证 [V, T, 1]）
+        yaw_b = yaw.view(1, T, 1).repeat(V, 1, 1)
+        dyaw_b = d_yaw.view(1, T, 1).repeat(V, 1, 1)
+        kappa_b = kappa.view(1, T, 1).repeat(V, 1, 1)
+
+        # 5) 拼接特征（时间维全是 T，不会短一维）
+        hist_feats = torch.cat([vel, speed, acc, yaw_b, dyaw_b, kappa_b], dim=-1)
+        # 形状: [V, T, 2 + 1 + 1 + 1 + 1 + 1] = [V, T, 7]
+        return hist_feats
+
+    @torch.no_grad()
+    def compute_cue_feats(
+            self,
+            instr_id: torch.Tensor,  # [T_h], int64, 0=none, 1=fwd, 2=left, 3=right
+            instr_strength: torch.Tensor,  # [T_h], float, 建议≥0
+            add_time_since: bool = True,
+            use_strength_for_event: bool = True,  # 计算“最近一次指令”时，是否要求强度>0
+    ) -> torch.Tensor:
+        """
+        返回: cue_feats [T_h, C_c]，列含义:
+          0-3: onehot of {none,fwd,left,right}
+          4  : strength (无指令处置0)
+          5  : signed_strength (左负右正，前进/无指令为0)
+          6  : time_since_last_cmd (从最近一次“有效指令”起的步数；无历史则从0累加)
+        """
+        assert instr_id.ndim == 1 and instr_strength.ndim == 1
+        T = instr_id.shape[0]
+        device = instr_id.device
+
+        # --- 1) one-hot 类别（4类，包含“无指令”）
+        onehot = F.one_hot(instr_id.long(), num_classes=4).float()  # [T,4]
+
+        # --- 2) 强度：仅在有指令(>0)时保留，否则置0，避免把“无指令”的强度带入模型
+        has_cmd = (instr_id > 0)
+        strength = torch.where(has_cmd, instr_strength, torch.zeros_like(instr_strength))
+        strength = strength.view(T, 1)  # [T,1]
+
+        # --- 3) 符号强度：左负右正，前进/无指令=0
+        #     这里“方向”只由类别决定，不受强度正负影响（若你的电压有符号，可以再乘一个 sign(strength)）
+        sign = torch.zeros_like(instr_strength)
+        sign = torch.where(instr_id == 2, -1.0, sign)  # left  -> -1
+        sign = torch.where(instr_id == 3, 1.0, sign)  # right -> +1
+        signed_strength = (sign * strength.view(-1)).view(T, 1)  # [T,1]
+
+        feats = [onehot, strength, signed_strength]
+
+        # --- 4) 最近一次有效指令的时间（步数）
+        if add_time_since:
+            # “有效指令”定义：instr_id>0 且（若 use_strength_for_event=True 则 strength>0）
+            if use_strength_for_event:
+                event_mask = has_cmd & (instr_strength > 0)
+            else:
+                event_mask = has_cmd
+
+            idx = torch.arange(T, device=device)
+            last_idx = torch.where(event_mask, idx, torch.full_like(idx, -1))
+            # 前缀最大：获得每一步最近一次事件的下标
+            cum_last, _ = torch.cummax(last_idx, dim=0)  # [-1, ..., t_last, ...]
+            time_since = (idx - cum_last).clamp(min=0).to(torch.float32).view(T, 1)
+            feats.append(time_since)
+
+        # 拼接输出
+        cue_feats = torch.cat(feats, dim=-1)  # [T, 4(+1+1+1)=7]
+        return cue_feats
+
+    @torch.no_grad()
+    def compute_zc(
+            self,
+            hist_feats: torch.Tensor,  # [V, T_h, C_h]
+            cue_feats: torch.Tensor,  # [T_h, C_c]
+            stats: dict = None,  # 训练集统计 {'mean': [4], 'std': [4]}，可为 None
+    ) -> torch.Tensor:
+        """
+        Dz = 4: [speed, d_yaw, kappa, signed_strength]
+        return: z_c [V, T_h, 4]
+        """
+        V, T, C = hist_feats.shape
+        speed = hist_feats[..., 2]  # [V,T]
+        d_yaw = hist_feats[..., 5]  # [V,T]
+        kappa = hist_feats[..., 6]  # [V,T]
+
+        signed_strength = torch.zeros(T, device=hist_feats.device)
+        if cue_feats is not None and cue_feats.shape[-1] >= 2:
+            signed_strength = cue_feats[..., -2]  # 与上面 compute_cue_feats 保持一致
+        signed_strength = signed_strength.view(1, T).expand(V, T)
+
+        z = torch.stack([speed, d_yaw, kappa, signed_strength], dim=-1)  # [V,T,4]
+
+        if stats is not None:
+            mean = torch.as_tensor(stats['mean'], device=z.device).view(1, 1, 4)
+            std = torch.as_tensor(stats['std'], device=z.device).view(1, 1, 4)
+            z = (z - mean) / (std + 1e-6)
+
+        return z
+
     def __len__(self):
         return self.data_len
 
     def __getitem__(self, index):
+        past = self.past_traj_original_scale[index][..., :2]  # [V,T_h,2] 取绝对坐标那两维
+        fut = self.fut_traj_original_scale[index]  # [V,T_p,2]
+
+        # 2) cue 的原始输入（示例：你应从日志里读到这两条）
+        instr_id = torch.from_numpy(self.cmd[index, :30, 0])  # [T_h] 0/1/2
+        instr_strength = torch.from_numpy(self.cmd[index, :30, 1])  # [T_h] float
+
+        # 3) 计算四个核心特征
+        hist_feats = self.compute_hist_feats(past, dt=self.dt, head_idx=self.head_idx, neck_idx=self.neck_idx)  # [V,T_h,C_h]
+        cue_feats = self.compute_cue_feats(instr_id, instr_strength)  # [T_h,C_c]
+        # z_d_logits = self.compute_zd_logits(hist_feats, cue_feats, s_thr=self.s_thr, r_thr=self.r_thr, tau=self.tau)  # [V,T_h,4]
+        # z_c = self.compute_zc(hist_feats, cue_feats, stats=None)  # [V,T_h,4]
+
         # 与 NBA 返回顺序对齐
         return [
             self.past_traj[index],                 # [V,T_h,6]
             self.fut_traj[index],                  # [V,T_p,2]
             self.past_traj_original_scale[index],  # [V,T_h,6]
             self.fut_traj_original_scale[index],   # [V,T_p,2]
-            self.fut_traj_vel[index]               # [V,T_p,2]
+            self.fut_traj_vel[index],              # [V,T_p,2]
+
+            hist_feats,
+            cue_feats,
+            # z_c
         ]
 
     def robust_minmax(self, x, q=(1, 99)):
@@ -201,3 +368,82 @@ class RatDatasetMinMax(Dataset):
 
     def iz(self, zx, mean, std):
         return zx * std + mean
+
+# ---------- 公用小工具 ----------
+def _central_diff(x, dt, pad_mode='replicate'):
+    """
+    x: [..., T, C] ; central difference in time
+    return: same shape
+    """
+    xp = F.pad(x[..., 2:, :], (0,0,1,0), mode=pad_mode)   # t+1
+    xm = F.pad(x[..., :-2, :], (0,0,0,1), mode=pad_mode)  # t-1
+    return (xp - xm) / (2 * dt)
+
+def _time_derivative(x: torch.Tensor, dt: float, time_dim: int = -2) -> torch.Tensor:
+    """
+    长度保持不变的一阶时间导数（forward/central/backward 差分混合）
+
+    参数
+    ----
+    x        : 张量，形状可为 (T,), (T,C), (...,T), (...,T,C)
+               约定时间维在 time_dim（当 x 维度>=3 时），否则自动推断：
+               - 1D: (T,) 视作 (T,1)
+               - 2D: (T,C) 视作 time_dim=0
+    dt       : 采样间隔（秒）
+    time_dim : x 的时间维（当 x.ndim >= 3 时生效），默认 -2（常见的 (..., T, C)）
+
+    返回
+    ----
+    与 x 同形状、同 dtype 的导数张量，时间长度与 x 完全一致
+    """
+    orig = x
+    dtype = x.dtype
+    squeeze_mode = None
+
+    # 统一到形状 (..., T, C)，便于差分
+    if x.ndim == 1:
+        # (T,) -> (1, T, 1)
+        x = x.view(1, x.shape[0], 1)
+        squeeze_mode = "T"
+    elif x.ndim == 2:
+        # (T, C) -> (1, T, C) （时间维=0）
+        x = x.unsqueeze(0)
+        squeeze_mode = "TC"
+    else:
+        # 把时间维移到 -2，通道维留在 -1
+        x = x.movedim(time_dim, -2)
+
+    T = x.size(-2)
+    dx = torch.empty_like(x, dtype=dtype)
+
+    if T == 1:
+        dx.zero_()
+    elif T == 2:
+        # 两帧：用前/后向差分；为了长度一致，让两端相同
+        d = (x[..., 1, :] - x[..., 0, :]) / dt
+        dx[..., 0, :] = d
+        dx[..., 1, :] = d
+    else:
+        # 前向差分（首帧）
+        dx[..., 0, :]  = (x[..., 1, :]   - x[..., 0, :])   / dt
+        # 中心差分（中间帧）
+        dx[..., 1:-1, :] = (x[..., 2:, :] - x[..., :-2, :]) / (2.0 * dt)
+        # 后向差分（末帧）
+        dx[..., -1, :] = (x[..., -1, :]  - x[..., -2, :])  / dt
+
+    # 还原到输入的轴顺序/形状
+    if orig.ndim >= 3:
+        dx = dx.movedim(-2, time_dim)  # 把时间维移回去
+    if squeeze_mode == "T":
+        dx = dx.view(-1)               # (T,)
+    elif squeeze_mode == "TC":
+        dx = dx.squeeze(0)             # (T, C)
+
+    return dx
+
+def _safe_div(a, b, eps=1e-6):
+    return a / (b.abs() + eps)
+
+def _wrap_pi(a):
+    # wrap angle to [-pi, pi]
+    return (a + torch.pi) % (2 * torch.pi) - torch.pi
