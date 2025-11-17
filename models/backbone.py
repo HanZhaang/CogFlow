@@ -8,7 +8,7 @@ from .motion_decoder.mtr_decoder import modulate
 from .utils.common_layers import build_mlps
 from einops import repeat, rearrange
 from models.context_encoder.mtr_encoder import SinusoidalPosEmb
-from models.context_encoder.condition_encoder import ConditionEncoder
+from models.context_encoder.condition_encoder import ZEncoder, ZFiLM
 
 
 class MotionTransformer(nn.Module):
@@ -17,6 +17,7 @@ class MotionTransformer(nn.Module):
         self.model_cfg = model_config
         self.dim = self.model_cfg.CONTEXT_ENCODER.D_MODEL # 统一的通道维（上下游对齐）
         self.config = config
+        self.logger = logger
 
         use_pre_norm = self.model_cfg.get('USE_PRE_NORM', False)
 
@@ -26,16 +27,24 @@ class MotionTransformer(nn.Module):
         self.context_encoder = build_context_encoder(self.model_cfg.CONTEXT_ENCODER, use_pre_norm)
 
         # update: 条件/指令编码器 + 注入层
-        self.cond_encoder = ConditionEncoder(
-            d_hist=self.model_cfg.get('COND_D_HIST', 0),  # 如 Δyaw/κ/speed 等
-            d_cue=self.model_cfg.get('COND_D_CUE', 0),  # 刺激等
-            d_goal=self.model_cfg.get('COND_D_GOAL', 0),  # 相对目标位姿等
-            d_zd=self.model_cfg.get('COND_D_ZD', 0),  # 离散模式 logits/onehot
-            d_zc=self.model_cfg.get('COND_D_ZC', 0),  # 连续潜变量
-            d_model=self.dim
+        self.z_encoder = ZEncoder(
+            d_hist = self.model_cfg.get('COND_D_HIST', 0),
+            d_cue = self.model_cfg.get('COND_D_CUE', 0),
+            d_model = self.dim,
+            d_z = self.model_cfg.get('COG_D_Z', 0)
         )
         # 最小侵入：一对 FiLM 调制 + 一个线性投影用于拼接
         self.cond_proj       = nn.Linear(self.dim, self.dim)
+        self.z_proj = nn.Linear(self.model_cfg.get('COG_D_Z', 0), self.dim)
+        self.z_film = ZFiLM(d_feat=self.dim)
+        self.z_gamma = nn.Linear(self.dim, self.dim)
+        self.z_beta = nn.Linear(self.dim, self.dim)
+
+        nn.init.zeros_(self.z_gamma.weight)
+        nn.init.zeros_(self.z_gamma.bias)
+        nn.init.zeros_(self.z_beta.weight)
+        nn.init.zeros_(self.z_beta.bias)
+
         self.cond_film_gamma = nn.Linear(self.dim, self.dim)
         self.cond_film_beta  = nn.Linear(self.dim, self.dim)
 
@@ -157,9 +166,26 @@ class MotionTransformer(nn.Module):
         encoder_out_batch = repeat(encoder_out, 'b a d -> b k a d', k=K, a=A) 	# [B, K, A, D]
 
         # update: 1.5 条件编码
-        cond_vec = self.cond_encoder(x_data)  # [B, dim]
-        cond_vec = self.cond_proj(cond_vec)  # 线性整形
-        cond_bka = repeat(cond_vec, 'b d -> b k a d', b=B, k=K, a=A)  # 对齐 (K,A)
+        # cond_vec = self.cond_encoder(x_data)  # [B, dim]
+        cond_flow, z = self.z_encoder(x_data)  # Stage A
+
+        z_mean = z.mean(dim=0)  # [d]
+        z_mean_scalar = z_mean.mean(dim=0)  # 标量
+        z_var_vec = z.var(dim=0, unbiased=False)  # [d] 逐维方差
+        z_var_scalar = z_var_vec.mean()  # 标量，便于画单条曲线
+
+        # self.logger.info("z mean: {}".format(z_mean_scalar.item()))
+        # self.logger.info("z var_batch_mean: {}".format(z_var_scalar.item()))
+        # self.logger.info("z/var_per_dim", z_var_vec)  # 可选：直方图
+
+        # cond_vec = self.cond_proj(cond_vec)  # 线性整形
+        cond_flow = self.cond_proj(cond_flow)
+        # cond_bka = repeat(cond_vec, 'b d -> b k a d', b=B, k=K, a=A)  # 对齐 (K,A)
+        # 2025-11-11 new:
+        z_feat = self.z_proj(z)
+
+        cond_bka = repeat(cond_flow, 'b d -> b k a d', k=K, a=A)
+        z_bka = z_feat[:, None, None, :].expand(B, K, A, -1)      # [B,K,A,d_model]
 
         # （2）把 y（T*D）嵌入到通道维：得到每个 (B,K,A) 的 token
         y_emb = self.noisy_y_mlp(y)  	# [B, K, A, D]
@@ -208,6 +234,12 @@ class MotionTransformer(nn.Module):
         emb_in = torch.cat((encoder_out_batch, y_emb, t_emb_batch, cond_bka), dim=-1)
         # emb_in = torch.cat((encoder_out_batch, y_emb, t_emb_batch), dim=-1)
         emb_fusion = self.init_emb_fusion_mlp(emb_in)	 	# [B, K, A, D]
+
+        # 4) 用 z 对 emb_fusion 做一次 FiLM（仿射）调制
+        gamma = self.z_gamma(z_bka)  # [B, K, A, D]
+        beta = self.z_beta(z_bka)  # [B, K, A, D]
+        emb_fusion = emb_fusion * (1.0 + gamma) + beta  # [B, K, A, D]
+
         query_token = self.post_pe_cat_mlp(self.apply_PE(emb_fusion, k_pe_batch, a_pe_batch)) 								# [B, K, A, D]
         readout_token = self.motion_decoder(query_token, t_emb)													# [B, K, A, D]	
 
