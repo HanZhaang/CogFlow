@@ -79,7 +79,6 @@ class FlowMatcher(nn.Module):
 
         # register_buffer = lambda name, val: self.register_buffer(name, val.to(torch.float32))
 
-        
 
     @property
     def device(self):
@@ -203,6 +202,7 @@ class FlowMatcher(nn.Module):
             noise = torch.randn_like(y_start_k)                                          # [B, K, T, D]
 
         # sample the latent space at time t
+        # 构造监督,给出
         x_t, u_t = self.fwd_sample_t(x0=noise, x1=y_start_k, t=t)                        # [B, K, T, D] * 2
 
         if self.objective == 'pred_data':
@@ -370,6 +370,7 @@ class FlowMatcher(nn.Module):
                                      'b a f d -> b k a (f d)', k=K) # 变成 [B, K, A, T*D]
         # 从损失输入构造器拿到时间t、中间状态y_t、目标速度/残差u_t、（占位返回）、损失权重l_weight
         # 常见返回：t:[B], y_t:[B,K,A,T*D], u_t:[B,K,A,T*D], l_weight:[B]或[B,A]
+        # 真的,这边变成y_t了
         t, y_t, u_t, _, l_weight = self.get_loss_input(y_start_k = fut_traj_normalized)
 
         # ---------- 模型前向输入尺度调整（可选） ----------

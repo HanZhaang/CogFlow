@@ -39,6 +39,7 @@ MODEL:
 
     COND_D_CUE: 7
     COND_D_HIST: 7
+    COG_D_Z: 64
     CONTEXT_ENCODER:
         NAME: MTREncoder
         NUM_OF_ATTN_NEIGHBORS: 8
@@ -68,7 +69,7 @@ train_batch_size             : 250
 test_batch_size              : 1000
 
 OPTIMIZATION:
-    NUM_EPOCHS: 150
+    NUM_EPOCHS: 500
 
     OPTIMIZER: AdamW
     LR: 0.001

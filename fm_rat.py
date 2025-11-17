@@ -35,8 +35,8 @@ def parse_config():
 	parser.add_argument('--batch_size', default=256, type=int, help='Override the batch size in the config file.')
 	parser.add_argument('--data_dir', type=str, default='./data/rat', help='Directory where the data is stored.')
 	parser.add_argument('--overfit', default=False, action='store_true', help='Overfit the testing set by setting it to the same entries as the training set.')
-	parser.add_argument('--n_train', type=int, default=4583, help='Number training scenes used.')
-	parser.add_argument('--n_test', type=int, default=1309, help='Number testing scenes used.')
+	parser.add_argument('--n_train', type=int, default=4144, help='Number training scenes used.')
+	parser.add_argument('--n_test', type=int, default=1184, help='Number testing scenes used.')
 	parser.add_argument('--rotate', default=False, action='store_true', help='Whether to rotate the data to canonical x-axis or not.')
 	parser.add_argument('--checkpt_freq', default=5, type=int, help='Override the checkpt_freq in the config file.')
 	parser.add_argument('--max_num_ckpts', default=5, type=int, help='Override the max_num_ckpts in the config file.')
@@ -85,6 +85,9 @@ def parse_config():
 	parser.add_argument('--weight_decay', type=float, default=None, help='Override the weight decay in the config file.')
 	### Optimization configuration ###
 
+	parser.add_argument('--load_pretrained', default=False, action='store_true', help='Whether to load a pretrained encoder.')
+	parser.add_argument('--ckpt_path', type=str, default=None, help='Path to the pretrained encoder checkpoint.')
+
 	return parser.parse_args()
 
 
@@ -102,7 +105,11 @@ def init_basics(args):
 	def _update_fm_params(args, cfg, tag):
 		if cfg.denoising_method == 'fm':
 			cfg.sampling_steps = args.sampling_steps
-			
+			cfg.load_pretrained = args.load_pretrained
+			if cfg.load_pretrained:
+				cfg.ckpt_path = args.ckpt_path
+				# tag += '_load_enc'
+
 			if args.fm_skewed_t is not None:
 				cfg.t_schedule = args.fm_skewed_t
 			else:
@@ -116,23 +123,23 @@ def init_basics(args):
 			cfg.fm_rew_sqrt = args.fm_rew_sqrt
 			cfg.fm_in_scaling = args.fm_in_scaling
 
-			if args.fm_skewed_t is not None:
-				tag += f'FM_S{cfg.sampling_steps}_{cfg.t_schedule}_{cfg.fm_wrapper[:4]}'
-			elif args.t_schedule == 'logit_normal':
-				tag += f'FM_S{cfg.sampling_steps}_{cfg.t_schedule[:3]}_m{cfg.logit_norm_mean}_s{cfg.logit_norm_std}_{cfg.fm_wrapper[:4]}'
-			elif args.t_schedule == 'uniform':
-				tag += f'FM_S{cfg.sampling_steps}_{cfg.t_schedule[:3]}_{cfg.fm_wrapper[:4]}'
+			# if args.fm_skewed_t is not None:
+			# 	tag += f'FM_S{cfg.sampling_steps}_{cfg.t_schedule}_{cfg.fm_wrapper[:4]}'
+			# elif args.t_schedule == 'logit_normal':
+			# 	tag += f'FM_S{cfg.sampling_steps}_{cfg.t_schedule[:3]}_m{cfg.logit_norm_mean}_s{cfg.logit_norm_std}_{cfg.fm_wrapper[:4]}'
+			# elif args.t_schedule == 'uniform':
+			# 	tag += f'FM_S{cfg.sampling_steps}_{cfg.t_schedule[:3]}_{cfg.fm_wrapper[:4]}'
 
 			if args.drop_method is not None and args.drop_logi_k is not None and args.drop_logi_m is not None:
 				cfg.drop_method = args.drop_method
 				cfg.drop_logi_k = args.drop_logi_k
 				cfg.drop_logi_m = args.drop_logi_m
-				tag += f'_drop_{cfg.drop_method}_m{cfg.drop_logi_m}_k{cfg.drop_logi_k}'
+				# tag += f'_drop_{cfg.drop_method}_m{cfg.drop_logi_m}_k{cfg.drop_logi_k}'
 
-			if cfg.fm_rew_sqrt:
-				tag += '_RESQ'
-			if cfg.fm_in_scaling:
-				tag += '_IS'
+			# if cfg.fm_rew_sqrt:
+			# 	tag += '_RESQ'
+			# if cfg.fm_in_scaling:
+			# 	tag += '_IS'
 		return cfg, tag
 
 	cfg, tag = _update_fm_params(args, cfg, tag)
@@ -324,6 +331,9 @@ def main():
 	"""
 	Main function to train the model.
 	"""
+	def set_requires_grad(module, flag: bool):
+		for p in module.parameters():
+			p.requires_grad = flag
 
 	"""Init everything"""
 	args = parse_config()
@@ -333,6 +343,15 @@ def main():
 	train_loader, test_loader = build_data_loader(cfg, args)
 	# 构建模型网络
 	denoiser = build_network(cfg, args, logger)
+
+	# # 1) 先把全模型都冻住
+	# set_requires_grad(denoiser, False)
+	#
+	# # 2) 只打开以下几块（Stage A）
+	# set_requires_grad(denoiser.model.z_encoder.head_z, True)  # 只训练 z 头
+	# set_requires_grad(denoiser.model.z_proj, True)
+	# set_requires_grad(denoiser.model.z_gamma, True)
+	# set_requires_grad(denoiser.model.z_beta, True)
 
 	"""Train the model"""
 	trainer = Trainer(
@@ -347,10 +366,15 @@ def main():
 		ema_update_every = 1,
 		) ### grid search
 
+	if args.load_pretrained:
+		print(cfg.model_dir)
+		trainer.load(cfg.ckpt_path)
+
 	trainer.train()
 
 
 if __name__ == "__main__":
 	main()
 
-# python fm_rat.py --exp rat_30_30_1103_cue_hist --tied_noise --fm_in_scaling --checkpt_freq 5 --batch_size 512 --init_lr 1e-3
+# python fm_rat.py --exp rat_30_30_1115_cue_film --tied_noise --fm_in_scaling --checkpt_freq 5 --batch_size 512 --init_lr 1e-3
+
