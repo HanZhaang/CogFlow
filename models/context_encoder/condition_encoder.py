@@ -44,6 +44,32 @@ class HistGRU(nn.Module):
 
         return y
 
+
+class ZEncoder(nn.Module):
+    def __init__(self, d_hist, d_cue, d_model, d_z):
+        super().__init__()
+        self.core = ConditionEncoder(d_hist, d_cue, d_goal=0, d_zd=0, d_zc=0, d_model=d_model)
+        self.head_cond = nn.Linear(d_model, d_model)  # 给原有cond路径
+        self.head_z    = nn.Linear(d_model, d_z)      # 认知慢变量（Stage A可用确定性）
+
+    def forward(self, x_data):
+        h      = self.core(x_data)              # [B, d_model]
+        cond   = self.head_cond(h)              # [B, d_model]
+        z      = self.head_z(h)                 # [B, d_z]   （Stage A: 不做采样）
+        return cond, z
+
+
+class ZFiLM(nn.Module):
+    def __init__(self, d_feat):
+        super().__init__()
+        self.gamma = nn.Linear(d_feat, d_feat)
+        self.beta  = nn.Linear(d_feat, d_feat)
+
+    def forward(self, feat, z):   # feat:[B,L,D], z:[B,D]
+        g, b = self.gamma(z), self.beta(z)   # [B,D]
+        return feat * (1 + g[:,None,:]) + b[:,None,:]
+
+
 class ConditionEncoder(nn.Module):
     """
     把多路条件（按时间序列）编码成一个固定维度 cond_vec（[B, d_model]）。
@@ -65,7 +91,7 @@ class ConditionEncoder(nn.Module):
         self.br_zd   = branch(d_zd)   #
         self.br_zc   = branch(d_zc)
         # update self.br_hist
-        in_cat = sum([d_model for b in [self.br_hist, self.br_cue,self.br_goal,self.br_zd,self.br_zc] if b is not None])
+        in_cat = sum([d_model for b in [self.br_cue,self.br_goal,self.br_zd,self.br_zc] if b is not None])
         self.fuse = nn.Sequential(
             nn.Linear(in_cat if in_cat>0 else d_model, d_model),
             nn.ReLU(),
@@ -81,7 +107,7 @@ class ConditionEncoder(nn.Module):
     def forward(self, inputs: dict):
         # 允许任意分支缺省
         outs = []
-        outs += [self.br_hist(inputs['hist_feats'])]
+        # outs += [self.br_hist(inputs['hist_feats'])]
         outs += [self._enc_one(self.br_cue , inputs['cond_cue'])]
         # outs += [self._enc_one(self.br_goal, inputs.get('goal_rel'))]
         # outs += [self._enc_one(self.br_zd  , inputs.get('z_d'))]
@@ -89,6 +115,6 @@ class ConditionEncoder(nn.Module):
         outs = [o for o in outs if o is not None]
         if len(outs) == 0:
             # 回退：没有条件就给零向量
-            return torch.zeros(inputs['batch_size'], self.fuse[0].in_features, device=next(self.parameters()).device)
+            return torch.zeros(self.fuse[0].in_features, device=next(self.parameters()).device)
         cond = torch.cat(outs, dim=-1)
         return self.fuse(cond)  # [B, d_model]

@@ -217,19 +217,19 @@ class Trainer(object):
         data = torch.load(os.path.join(self.cfg.model_dir, f'{ckpt_name}.pt'), map_location=self.device, weights_only=True)
 
         model = self.accelerator.unwrap_model(self.denoiser)
-        model.load_state_dict(data['model'])
+        model.load_state_dict(data['model'], strict=False)
 
         self.step = data['step']
-        self.opt.load_state_dict(data['opt'])
+        # self.opt.load_state_dict(data['opt'], strict=False)
         if self.accelerator.is_main_process:
             # pass
-            self.ema.load_state_dict(data["ema"])
+            self.ema.load_state_dict(data["ema"], strict=False)
 
         if 'version' in data:
             print(f"loading from version {data['version']}")
 
         if exists(self.accelerator.scaler) and exists(data['scaler']):
-            self.accelerator.scaler.load_state_dict(data['scaler'])
+            self.accelerator.scaler.load_state_dict(data['scaler'], strict=False)
 
     def train(self):
         """
@@ -347,7 +347,7 @@ class Trainer(object):
         ade_frames: int
         fde_frame: int
         '''
-        print("dis shape ADE = {}".format(distances.shape))
+        # print("dis shape ADE = {}".format(distances.shape))
         ade_best = (distances[..., :end_frame]).mean(dim=-1).min(dim=-1).values.sum(dim=0)
         fde_best = (distances[..., end_frame-1]).min(dim=-1).values.sum(dim=0)
         ade_avg = (distances[..., :end_frame]).mean(dim=-1).mean(dim=-1).sum(dim=0)
@@ -363,7 +363,6 @@ class Trainer(object):
         ade_frames: int
         fde_frame: int
         '''
-        print("dis shape JADE = {}".format(distances.shape))
         jade_best = (distances[..., :end_frame]).mean(dim=-1).sum(dim=0).min(dim=-1).values
         jfde_best = (distances[..., end_frame-1]).sum(dim=0).min(dim=-1).values
         jade_avg = (distances[..., :end_frame]).mean(dim=-1).sum(dim=0).mean(dim=0)
@@ -421,9 +420,9 @@ class Trainer(object):
   
         # testing_mode=False, training_err_check=False
         if eval_on_train:
-            fut_traj_gt, _, _ = self.eval_dataloader(training_err_check=True)
+            fut_traj_gt, _, _ = self.eval_dataloader(training_err_check=True, save_trajs=True)
         else:
-            fut_traj_gt, _, _ = self.eval_dataloader(testing_mode=True)
+            fut_traj_gt, _, _ = self.eval_dataloader(testing_mode=True, save_trajs=True)
         self.logger.info(f'testing complete with the {mode} ckpt')
 
 
@@ -434,16 +433,20 @@ class Trainer(object):
 
         # [B, K, A, T*F], [B, S, K, A, T*F], [B, S, K, A, T*F], [B, K, A]
         pred_traj, pred_traj_at_t, t_seq, y_t_seq, pred_score = self.denoiser.sample(data, num_trajs=self.cfg.denoising_head_preds, return_all_states=self.save_samples)
+        print("??? pred_traj shape = {}".format(pred_traj.shape))
         assert list(pred_traj.shape[2:]) == [self.cfg.agents, self.cfg.MODEL.MODEL_OUT_DIM]
 
         pred_traj = rearrange(pred_traj, 'b k a (f d) -> (b a) k f d', f=self.cfg.future_frames)[...,0:2]  # [B, k_preds, 11, 40] -> [B * 11, k_preds, 20, 2]
+        print("???? pred_traj shape = {}".format(pred_traj.shape))
         pred_traj_at_t = rearrange(pred_traj_at_t, 'b t k a (f d) -> (b a) t k f d', f=self.cfg.future_frames)[...,0:2]  # [B, k_preds, 11, 40] -> [B * 11, k_preds, 20, 2]
 
         if self.cfg.get('data_norm', None) == 'min_max':
             # pred_traj = unnormalize_min_max(pred_traj, self.cfg.fut_traj_min, self.cfg.fut_traj_max, -1, 1)
             # pred_traj_at_t = unnormalize_min_max(pred_traj_at_t, self.cfg.fut_traj_min, self.cfg.fut_traj_max, -1, 1)
+            print("????? pred_traj shape = {} {}".format(self.cfg.stats["fut_mean"], self.cfg.stats["fut_std"]))
             pred_traj = unnormalize_mean_std(pred_traj, self.cfg.stats["fut_mean"], self.cfg.stats["fut_std"],
                                                      1)  # [B, K, A, T, D]
+            print("?????? pred_traj shape = {}".format(pred_traj))
             pred_traj_at_t = unnormalize_mean_std(pred_traj_at_t, self.cfg.stats["fut_mean"],
                                                    self.cfg.stats["fut_std"], 1)  # [B, K, A, T, D]
 
@@ -528,7 +531,7 @@ class Trainer(object):
         pickle.dump(states_to_save, open(save_path, 'wb'))
 
     
-    def eval_dataloader(self, testing_mode=False, training_err_check=False):
+    def eval_dataloader(self, testing_mode=False, training_err_check=False, save_trajs=False):
         """
         General API to evaluate the dataloader/dataset
         """
@@ -559,16 +562,26 @@ class Trainer(object):
         start = torch.cuda.Event(enable_timing=True)
         end = torch.cuda.Event(enable_timing=True)
         start.record()
+        pred_trajs = []
+        hits_trajs = []
+        cue_trajs = []
+        fut_gt_trajs = []
+
         for i_batch, data in enumerate(dl): 
             bs = int(data['batch_size'])
             data = {k : v.to(self.device) for k, v in data.items()}
 
             pred_traj, pred_traj_t, t_seq, y_t_seq, pred_score = self.sample_from_denoising_model(data)
 
+            print("pred_traj type = {}, shape = {}".format(type(pred_traj), pred_traj.shape))
+            pred_trajs.append(pred_traj)
+            hits_trajs.append(data["past_traj_original_scale"])
+            cue_trajs.append(data["cond_cue"])
+            fut_gt_trajs.append(data['fut_traj_original_scale'])
+
             fut_traj = rearrange(data['fut_traj_original_scale'], 'b a f d -> (b a) f d')               # [B, A, T, F] -> [B * A, T, F]
             fut_traj_gt = fut_traj.unsqueeze(1).repeat(1, self.cfg.denoising_head_preds, 1, 1)          # [B * A, K, T, F]
             distances = (fut_traj_gt - pred_traj).norm(p=2, dim=-1)                                     # [B * A, K, T]
-
             distances_t = (pred_traj_t - fut_traj_gt.unsqueeze(1)).norm(p=2, dim=-1)                    # [B * A, S, K, T]
             
             ade_fde_ = self.compute_ADE_FDE(distances_t, self.cfg.future_frames)                        # 4 * [S], denoising steps
@@ -615,7 +628,7 @@ class Trainer(object):
                 y_t_seq = y_t_seq[:, -cutoff_timesteps:]
                 y_t_seq = rearrange(y_t_seq, 'b s k a (f d) -> b s k a f d', f=self.cfg.future_frames)
 
-                pred_traj = rearrange(pred_traj, '(b a) k f d -> b k a f d', b=bs)  # [B, K, A, T, F]
+                pred_traj = rearrange(pred_traj, '(b a) k f d -> b k a f d', b=bs)  # [B, K, A, F, D]
             
                 num_datapoints = len(y_t_seq)
 
@@ -677,8 +690,35 @@ class Trainer(object):
             self.logger.info('--JADE_avg({:.1f}s): {:.7f}\t--JFDE_avg({:.1f}s): {:.7f}'.format(
                 time+1, performance_joint['JADE_avg'][time]/num_trajs, time+1, performance_joint['JFDE_avg'][time]/num_trajs))
 
-        
-       
+        if save_trajs:
+            pred_trajs_np = []
+            for item in pred_trajs:
+                item = rearrange(item, '(b a) k f d -> b k a f d', a=8)  # [B, K, A, F, D]
+                item = item.cpu().detach().numpy()
+                pred_trajs_np.append(item)
+
+            # print(pred_trajs_np[0].shape)
+            arr = np.concatenate(pred_trajs_np, axis=0)  # 形状变为 (N, T, 2)
+            # print(arr.shape)
+            np.save(r"D:\04_code\MoFlow\visualize\trajs\pred_trajs.npy", arr)
+
+            hits_trajs = [item.cpu().detach().numpy() for item in hits_trajs]
+            # print(hits_trajs[0].shape)
+            arr = np.concatenate(hits_trajs, axis=0)  # 形状变为 (N, T, 2)
+            # print(arr.shape)
+            np.save(r"D:\04_code\MoFlow\visualize\trajs\hist_trajs.npy", arr)
+
+            cue_trajs = [item.cpu().detach().numpy() for item in cue_trajs]
+            # print(cue_trajs[0].shape)
+            arr = np.concatenate(cue_trajs, axis=0)  # 形状变为 (N, T, 2)
+            # print(arr.shape)
+            np.save(r"D:\04_code\MoFlow\visualize\trajs\cue_trajs.npy", arr)
+
+            fut_gt_trajs = [item.cpu().detach().numpy() for item in fut_gt_trajs]
+            arr = np.concatenate(fut_gt_trajs, axis=0)  # 形状变为 (N, T, 2)
+            print(arr.shape)
+            np.save(r"D:\04_code\MoFlow\visualize\trajs\fut_gt_trajs.npy", arr)
+
         return fut_traj_gt, performance, num_trajs
 
 

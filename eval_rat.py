@@ -38,8 +38,8 @@ def parse_config():
 	# Data configuration
 	parser.add_argument('--batch_size', default=None, type=int, help='Override the batch size in the config file.')
 	parser.add_argument('--data_dir', type=str, default='./data/rat', help='Directory where the data is stored.')
-	parser.add_argument('--n_train', type=int, default=4583, help='Number training scenes used.')
-	parser.add_argument('--n_test', type=int, default=1309, help='Number testing scenes used.')
+	parser.add_argument('--n_train', type=int, default=20, help='Number training scenes used.')
+	parser.add_argument('--n_test', type=int, default=30, help='Number testing scenes used.')
 	parser.add_argument('--rotate', default=False, action='store_true', help='Whether to rotate the data to canonical x-axis or not.')
 	parser.add_argument('--data_norm', default='min_max', choices=['min_max', 'sqrt'], help='Normalization method for the data.')
 
@@ -240,4 +240,4 @@ def main():
 if __name__ == "__main__":
 	main()
 
-# python eval_rat.py --ckpt_path D:\04_code\MoFlow\results_nba\cor_fm\rat_30_30_1103_cue_hist_FM_S10_log_m-0.5_s1.5_dire_drop_emb_m0.5_k20.0_IS_TN_NN_A_REG_S_subset4583_min_max_LR0.001_WD0.05_BS512_EP150\models\checkpoint_last.pt --batch_size 1000 --sampling_steps 100 --solver lin_poly --lin_poly_p 5 --lin_poly_long_step 1000 --save_samples --eval_on_train
+# python eval_rat.py --ckpt_path D:\04_code\MoFlow\results_nba\cor_fm\rat_30_30_1115_cue_film_TN_NN_A_REG_S_subset4144_min_max_LR0.001_WD0.05_BS512_EP500\models\checkpoint_last.pt --batch_size 1000 --sampling_steps 100 --solver lin_poly --lin_poly_p 5 --lin_poly_long_step 1000 --save_samples

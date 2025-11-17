@@ -210,3 +210,6 @@ data/rat/hist10pred20/rat_val.npy
 
 cfg/rat/log/
 cfg/rat/models/
+
+data/rat/hist30pred30smooth/
+visualize/trajs/
