@@ -118,7 +118,9 @@ def plot_traj_with_heading_and_stim(
     ax.grid(True, linestyle="--", linewidth=0.6, alpha=0.35)
 
     ax.legend(frameon=False, loc="best")
+    # plt.xlim(0, 640)
     plt.xlim(history_pos[-1, 0] - 100, history_pos[-1, 0] + 100)
+    # plt.ylim(0, 480)
     plt.ylim(history_pos[-1, 1] - 100, history_pos[-1, 1] + 100)
     plt.tight_layout()
     return fig, ax
@@ -139,20 +141,22 @@ if __name__ == "__main__":
     print("cue_trajs shape = {}".format(cue_trajs.shape))
     print("fut_gt_trajs shape = {}".format(fut_gt_trajs.shape))
 
-    idx = 3
+    idx = 13
 
     history_pos = hist_trajs[idx, 7, :, 0:2]
     hist_head = hist_trajs[idx, 5, :, 0:2]
     hist_neck = hist_trajs[idx, 7, :, 0:2]
-    init = hist_trajs[idx, 7, -1:, 0:2]
 
+    init = hist_trajs[idx, 7, -1:, 0:2]
     # init = np.expand_dims(init, 0)
     init = init.repeat(30, 0)
+
     gt_pos = fut_gt_trajs[idx, 7, :, :] + init
 
     init = np.expand_dims(init, 0)
     init = init.repeat(10, 0)
     preds_pos = pred_trajs[idx, 0:10, 7, :, :] + init
+    # preds_pos = init.tolist().extend(pred_trajs[idx, 0:10, 7, :, :])
 
     stim_types = cue_trajs[idx, :4]    # (..., 4)
     stim_types = stim_types.argmax(axis=-1)

@@ -433,20 +433,20 @@ class Trainer(object):
 
         # [B, K, A, T*F], [B, S, K, A, T*F], [B, S, K, A, T*F], [B, K, A]
         pred_traj, pred_traj_at_t, t_seq, y_t_seq, pred_score = self.denoiser.sample(data, num_trajs=self.cfg.denoising_head_preds, return_all_states=self.save_samples)
-        print("??? pred_traj shape = {}".format(pred_traj.shape))
+        # print("??? pred_traj shape = {}".format(pred_traj.shape))
         assert list(pred_traj.shape[2:]) == [self.cfg.agents, self.cfg.MODEL.MODEL_OUT_DIM]
 
         pred_traj = rearrange(pred_traj, 'b k a (f d) -> (b a) k f d', f=self.cfg.future_frames)[...,0:2]  # [B, k_preds, 11, 40] -> [B * 11, k_preds, 20, 2]
-        print("???? pred_traj shape = {}".format(pred_traj.shape))
+        # print("???? pred_traj shape = {}".format(pred_traj.shape))
         pred_traj_at_t = rearrange(pred_traj_at_t, 'b t k a (f d) -> (b a) t k f d', f=self.cfg.future_frames)[...,0:2]  # [B, k_preds, 11, 40] -> [B * 11, k_preds, 20, 2]
 
         if self.cfg.get('data_norm', None) == 'min_max':
             # pred_traj = unnormalize_min_max(pred_traj, self.cfg.fut_traj_min, self.cfg.fut_traj_max, -1, 1)
             # pred_traj_at_t = unnormalize_min_max(pred_traj_at_t, self.cfg.fut_traj_min, self.cfg.fut_traj_max, -1, 1)
-            print("????? pred_traj shape = {} {}".format(self.cfg.stats["fut_mean"], self.cfg.stats["fut_std"]))
+            # print("????? pred_traj = {} {}".format(self.cfg.stats["fut_mean"], self.cfg.stats["fut_std"]))
             pred_traj = unnormalize_mean_std(pred_traj, self.cfg.stats["fut_mean"], self.cfg.stats["fut_std"],
                                                      1)  # [B, K, A, T, D]
-            print("?????? pred_traj shape = {}".format(pred_traj))
+            # print("?????? pred_traj shape = {}".format(pred_traj))
             pred_traj_at_t = unnormalize_mean_std(pred_traj_at_t, self.cfg.stats["fut_mean"],
                                                    self.cfg.stats["fut_std"], 1)  # [B, K, A, T, D]
 
@@ -565,7 +565,7 @@ class Trainer(object):
         pred_trajs = []
         hits_trajs = []
         cue_trajs = []
-        fut_gt_trajs = []
+        fut_trajs = []
 
         for i_batch, data in enumerate(dl): 
             bs = int(data['batch_size'])
@@ -573,19 +573,17 @@ class Trainer(object):
 
             pred_traj, pred_traj_t, t_seq, y_t_seq, pred_score = self.sample_from_denoising_model(data)
 
-            print("pred_traj type = {}, shape = {}".format(type(pred_traj), pred_traj.shape))
             pred_trajs.append(pred_traj)
             hits_trajs.append(data["past_traj_original_scale"])
             cue_trajs.append(data["cond_cue"])
-            fut_gt_trajs.append(data['fut_traj_original_scale'])
+            fut_trajs.append(data['fut_traj'])
 
-            fut_traj = rearrange(data['fut_traj_original_scale'], 'b a f d -> (b a) f d')               # [B, A, T, F] -> [B * A, T, F]
+            fut_traj = rearrange(data['fut_traj'], 'b a f d -> (b a) f d')               # [B, A, T, F] -> [B * A, T, F]
             fut_traj_gt = fut_traj.unsqueeze(1).repeat(1, self.cfg.denoising_head_preds, 1, 1)          # [B * A, K, T, F]
             distances = (fut_traj_gt - pred_traj).norm(p=2, dim=-1)                                     # [B * A, K, T]
             distances_t = (pred_traj_t - fut_traj_gt.unsqueeze(1)).norm(p=2, dim=-1)                    # [B * A, S, K, T]
             
             ade_fde_ = self.compute_ADE_FDE(distances_t, self.cfg.future_frames)                        # 4 * [S], denoising steps
-           
 
             if self.cfg.dataset == 'nba':
                 freq = 5 
@@ -694,7 +692,9 @@ class Trainer(object):
             pred_trajs_np = []
             for item in pred_trajs:
                 item = rearrange(item, '(b a) k f d -> b k a f d', a=8)  # [B, K, A, F, D]
-                item = item.cpu().detach().numpy()
+                item = item.cpu()
+                item = unnormalize_mean_std(item, self.cfg.stats["fut_mean"], self.cfg.stats["fut_std"],0)  # [B, K, A, T, D]
+                item = item.detach().numpy()
                 pred_trajs_np.append(item)
 
             # print(pred_trajs_np[0].shape)
@@ -714,8 +714,16 @@ class Trainer(object):
             # print(arr.shape)
             np.save(r"D:\04_code\MoFlow\visualize\trajs\cue_trajs.npy", arr)
 
-            fut_gt_trajs = [item.cpu().detach().numpy() for item in fut_gt_trajs]
-            arr = np.concatenate(fut_gt_trajs, axis=0)  # 形状变为 (N, T, 2)
+            # fut_trajs = [item.cpu().detach().numpy() for item in fut_gt_trajs]
+            fut_trajs_np = []
+            for item in fut_trajs:
+                # item = rearrange(item, '(b a) f d -> b a f d', a=8)  # [B, K, A, F, D]
+                item = item.cpu()
+                item = unnormalize_mean_std(item, self.cfg.stats["fut_mean"], self.cfg.stats["fut_std"],0)  # [B, K, A, T, D]
+                item = item.detach().numpy()
+                fut_trajs_np.append(item)
+
+            arr = np.concatenate(fut_trajs_np, axis=0)  # 形状变为 (N, T, 2)
             print(arr.shape)
             np.save(r"D:\04_code\MoFlow\visualize\trajs\fut_gt_trajs.npy", arr)
 
