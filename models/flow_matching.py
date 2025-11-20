@@ -76,7 +76,6 @@ class FlowMatcher(nn.Module):
 
         # set up the loss buffer
         self.loss_buffer = LossBuffer(t_min=0, t_max=1.0, num_time_steps=100)
-
         # register_buffer = lambda name, val: self.register_buffer(name, val.to(torch.float32))
 
 
@@ -368,6 +367,7 @@ class FlowMatcher(nn.Module):
         # 把未来真值复制K份以便“best-of-K”训练；展平(T,D)->(T*D)便于与模型接口对齐
         fut_traj_normalized = repeat(x_data['fut_traj'],   # [B, A, T, D]
                                      'b a f d -> b k a (f d)', k=K) # 变成 [B, K, A, T*D]
+        # print("fut_traj_normalized shape = {}".format(fut_traj_normalized.shape))
         # 从损失输入构造器拿到时间t、中间状态y_t、目标速度/残差u_t、（占位返回）、损失权重l_weight
         # 常见返回：t:[B], y_t:[B,K,A,T*D], u_t:[B,K,A,T*D], l_weight:[B]或[B,A]
         # 真的,这边变成y_t了
@@ -407,8 +407,8 @@ class FlowMatcher(nn.Module):
         if self.cfg.get('data_norm', None) == 'min_max':
             # denoised_y_metric = unnormalize_min_max(denoised_y, self.cfg.fut_traj_min, self.cfg.fut_traj_max, -1, 1) 		 # [B, K, A, T, D]
             # fut_traj_metric = unnormalize_min_max(fut_traj_normalized, self.cfg.fut_traj_min, self.cfg.fut_traj_max, -1, 1)  # [B, K, A, T, D]
-            denoised_y_metric = unnormalize_mean_std(denoised_y, self.cfg.stats["fut_mean"], self.cfg.stats["fut_std"], 1) 		 # [B, K, A, T, D]
-            fut_traj_metric = unnormalize_mean_std(fut_traj_normalized, self.cfg.stats["fut_mean"], self.cfg.stats["fut_std"], 1)  # [B, K, A, T, D]
+            denoised_y_metric = unnormalize_mean_std(denoised_y, self.cfg.stats["fut_mean"], self.cfg.stats["fut_std"], 0) 		 # [B, K, A, T, D]
+            fut_traj_metric = unnormalize_mean_std(fut_traj_normalized, self.cfg.stats["fut_mean"], self.cfg.stats["fut_std"], 0)  # [B, K, A, T, D]
         elif self.cfg.get('data_norm', None) == 'sqrt':
             denoised_y_metric = unnormalize_sqrt(denoised_y, self.sqrt_a_, self.sqrt_b_)            # [B, K, A, T, D]
             fut_traj_metric = unnormalize_sqrt(fut_traj_normalized, self.sqrt_a_, self.sqrt_b_)     # [B, K, A, T, D]
@@ -514,4 +514,6 @@ class FlowMatcher(nn.Module):
         return loss, loss_reg.mean(), loss_cls.mean(), loss_reg_vel.mean()
 
     def forward(self, x, log_dict=None):
+        self.cfg.stats["fut_mean"] = self.cfg.stats["fut_mean"].cuda()
+        self.cfg.stats["fut_std"] = self.cfg.stats["fut_std"].cuda()
         return self.p_losses(x, log_dict)

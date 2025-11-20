@@ -109,6 +109,9 @@ class MotionTransformer(nn.Module):
 
         self.reg_head = build_mlps(c_in=self.dim, mlp_channels=self.model_cfg.REGRESSION_MLPS, ret_before_act=True, without_norm=True)
         self.cls_head = build_mlps(c_in=dim_decoder, mlp_channels=self.model_cfg.CLASSIFICATION_MLPS, ret_before_act=True, without_norm=True)
+        # self.log_scale_x  = nn.Parameter(torch.tensor(1.0))
+        # self.log_scale_y  = nn.Parameter(torch.tensor(1.0))
+
         # 说明：你这里有两套 readout：一个是 reg_head（输入 dim，输出 T*D），
         # 另一个是 cls_head（输入 decoder维，输出 K类logit）。实际 forward 里 reg_head 用在 decoder 之后。
 
@@ -245,6 +248,14 @@ class MotionTransformer(nn.Module):
 
         # （8）读出：回归分支输出 T*D，分类分支输出 [B,K,A] 的打分
         denoiser_x = self.reg_head(readout_token)  										# [B, K, A, F * D]
+        # denoiser_x = rearrange(denoiser_x, 'b k a (f d) -> b k a f d', d=2)
+        # scale_x = torch.exp(self.log_scale_x)
+        # scale_y = torch.exp(self.log_scale_y)
+        # print("scale x =  {} scale y = {}".format(scale_x, scale_y))
+        # denoiser_x[:, :, :, :, 0] *= scale_x
+        # denoiser_x[:, :, :, :, 1] *= scale_y
+        # denoiser_x = rearrange(denoiser_x, 'b k a f d -> b k a (f d)')
+        # print("denoiser_x shape = {}".format(denoiser_x.shape))
         denoiser_cls = self.cls_head(readout_token).squeeze(-1) 						# [B, K, A]
 
         return denoiser_x, denoiser_cls

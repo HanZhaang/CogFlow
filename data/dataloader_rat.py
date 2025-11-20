@@ -90,14 +90,14 @@ class RatDatasetMinMax(Dataset):
 
         if not overfit:
             if training:
-                data_root = os.path.join(data_dir, 'rat_ver2_smooth_k5_3030/rat_pose_train.npy')
-                cmd_root = os.path.join(data_dir, 'rat_ver2_smooth_k5_3030/rat_stim_train.npy')
+                data_root = os.path.join(data_dir, 'rat_ver2_smooth_3030_2/rat_pose_train.npy')
+                cmd_root = os.path.join(data_dir, 'rat_ver2_smooth_3030_2/rat_stim_train.npy')
             else:
-                data_root = os.path.join(data_dir, 'rat_ver2_smooth_k5_3030/rat_pose_val.npy')
-                cmd_root = os.path.join(data_dir, 'rat_ver2_smooth_k5_3030/rat_stim_val.npy')
+                data_root = os.path.join(data_dir, 'rat_ver2_smooth_3030_2/rat_pose_test.npy')
+                cmd_root = os.path.join(data_dir, 'rat_ver2_smooth_3030_2/rat_stim_test.npy')
         else:
-            data_root = os.path.join(data_dir, 'rat_ver2_smooth_k5_3030/rat_pose_train.npy')
-            cmd_root = os.path.join(data_dir, 'rat_ver2_smooth_k5_3030/rat_stim_train.npy')
+            data_root = os.path.join(data_dir, 'rat_ver2_smooth_3030_2/rat_pose_train.npy')
+            cmd_root = os.path.join(data_dir, 'rat_ver2_smooth_3030_2/rat_stim_train.npy')
 
         self.trajs_raw = np.load(data_root) #(N,15,11,2)
         self.cmd_raw = np.load(cmd_root)
@@ -137,6 +137,8 @@ class RatDatasetMinMax(Dataset):
                                        torch.zeros_like(fut_traj[:, :, -1:])], dim=2)
 
         # 记录 min/max（训练阶段初始化给 cfg）
+        # print("Training = {}".format(training))
+        # print("cfg.stats = {}".format(cfg.stats))
         if training:
             stats = {}
             # 绝对位置
@@ -168,7 +170,6 @@ class RatDatasetMinMax(Dataset):
             cfg.fut_traj_min  = None
             cfg.past_traj_max = None
             cfg.past_traj_min = None
-
         self.past_traj_original_scale = past_traj.clone()
         self.fut_traj_original_scale  = fut_traj.clone()
 
@@ -364,6 +365,7 @@ class RatDatasetMinMax(Dataset):
         return lo, hi
 
     def z(self, x, mean, std):
+        print("Normalize shape = {}".format(x.shape))
         return (x - mean) / std
 
     def iz(self, zx, mean, std):
