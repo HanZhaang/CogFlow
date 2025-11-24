@@ -221,7 +221,9 @@ class FlowMatcher(nn.Module):
         else:
             y_t_in = y_t
 
-        model_out, pred_score = self.model(y_t_in, t, x_data = x)
+        # model_out, pred_score = self.model(y_t_in, t, x_data = x)
+        model_out = self.model(y_t_in, t, x_data = x)
+        pred_score = torch.tensor(0, device="cuda:0")
         y_data_at_t = self.fm_wrapper_func(y_t, t, model_out)            # [B, K, A, F * D]
 
         if self.objective == 'pred_vel':
@@ -393,14 +395,14 @@ class FlowMatcher(nn.Module):
         # self.model: 输入（噪声/中间态 y_t_in, 时间 t, 上下文 x_data），输出：
         #   - model_out: [B, K, A, T*D]  速度/残差/去噪方向（取决于 fm_wrapper_func 的定义）
         #   - denoiser_cls: [B, K, A]    每个候选分支的logits，用于选择/分类损失（可选）
-        model_out, denoiser_cls = self.model(y_t_in, t, x_data=x_data)  # [B, K, A, T * D] + [B, K, A]
+        model_out = self.model(y_t_in, t, x_data=x_data)  # [B, K, A, T * D] + [B, K, A]
         # 把网络输出包一层“FM包装器”：根据FM定义把 model_out 映射到“去噪后的 y”（如 ŷ_0 或 ŷ_{t-Δ}）
         # 常见：Rectified Flow时 denoised_y = y_t + Δt * v_theta(x_t,t)；或 Wrapper 把速度场转换为数据空间
         denoised_y = self.fm_wrapper_func(y_t, t, model_out) # [B, K, A, T*D]
 
         # ---------- 还原形状，进入度量空间（反归一化） ----------
         # 把最后一维 T*D 还原成 [T, D]
-        denoised_y = rearrange(denoised_y, 'b k a (f d) -> b k a f d', f = self.cfg.future_frames)
+        denoised_y = rearrange(denoised_y, 'b k a (f d) -> b k a f d', f=self.cfg.future_frames)
         # 同样处理GT（注意 fut_traj_normalized 此刻是 [B,K,A,T*D]，还原成 [B,K,A,T,2]）
         fut_traj_normalized = fut_traj_normalized.view(B, K, A, T, 2)
         # 根据 data_norm 反归一化到“评估/物理单位”（像素或厘米）
@@ -459,7 +461,7 @@ class FlowMatcher(nn.Module):
             loss_reg_b = denoising_error_per_scene.gather(1, selected_components[:, None]).squeeze(1)  		# [B]
 
             # 分类头：预测哪个K是最佳（对A平均后为 [B,K]）
-            cls_logits = denoiser_cls.mean(dim=-1)  # [B, K]
+            # cls_logits = denoiser_cls.mean(dim=-1)  # [B, K]
             loss_cls_b = F.cross_entropy(input=cls_logits, target=selected_components, reduction='none')	# [B]
         elif self.cfg.LOSS_NN_MODE == 'agent':
             # agent-level selection
@@ -470,10 +472,10 @@ class FlowMatcher(nn.Module):
             # 再对A平均成 [B]
             loss_reg_b = loss_reg_b.mean(dim=-1)  # [B]
             # 分类头：把 [B,K,A] 拉平为 [B*A,K]，每个agent各自做分类
-            cls_logits = rearrange(denoiser_cls, 'b k a -> (b a) k')	# [B * A, K]
-            cls_labels = selected_components.view(-1)					# [B * A]
-            loss_cls_b = F.cross_entropy(input=cls_logits, target=cls_labels, reduction='none')	 # [B * A]
-            loss_cls_b = loss_cls_b.view(B, A).mean(dim=-1)  	# [B]
+            # cls_logits = rearrange(denoiser_cls, 'b k a -> (b a) k')	# [B * A, K]
+            # cls_labels = selected_components.view(-1)					# [B * A]
+            # loss_cls_b = F.cross_entropy(input=cls_logits, target=cls_labels, reduction='none')	 # [B * A]
+            # loss_cls_b = loss_cls_b.view(B, A).mean(dim=-1)  	# [B]
         elif self.cfg.LOSS_NN_MODE == 'both':
             # 3) 同时做场景级与agent级的选择，并线性组合
             selected_components = denoising_error_per_scene.argmin(dim=1)  # [B]
@@ -487,14 +489,15 @@ class FlowMatcher(nn.Module):
             loss_reg_b = self.cfg.OPTIMIZATION.LOSS_WEIGHTS.get('omega', 1.0)  * loss_reg_b_scene + loss_reg_b_agent
 
             ## 分类损失占位（如未训练分类头）
-            loss_cls_b = torch.zeros_like(loss_reg_b)
+            # loss_cls_b = torch.zeros_like(loss_reg_b)
 
         # ---------- 组装总损失 ----------
         # 回归损失：按时间层级/噪声层级的权重 l_weight（通常来自 t 或路径调度）加权
         # l_weight 需与 [B] 对齐（若是 [B,A] 也应在上面对应求均值后再乘）
         loss_reg = (loss_reg_b * l_weight).mean()  # scalar
         # 分类损失：平均到 batch 标量
-        loss_cls = loss_cls_b.mean()
+        # loss_cls = loss_cls_b.mean()
+        loss_cls = np.array([0])
         # 各项权重
         weight_reg = self.cfg.OPTIMIZATION.LOSS_WEIGHTS.get('reg', 1.0)
         weight_cls = self.cfg.OPTIMIZATION.LOSS_WEIGHTS.get('cls', 1.0)

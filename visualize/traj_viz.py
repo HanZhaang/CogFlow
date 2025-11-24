@@ -140,8 +140,8 @@ if __name__ == "__main__":
     print("hist_trajs shape = {}".format(hist_trajs.shape))
     print("cue_trajs shape = {}".format(cue_trajs.shape))
     print("fut_gt_trajs shape = {}".format(fut_gt_trajs.shape))
-
-    idx = 13
+    # 1 2 3 5 8
+    idx = 1
 
     history_pos = hist_trajs[idx, 7, :, 0:2]
     hist_head = hist_trajs[idx, 5, :, 0:2]

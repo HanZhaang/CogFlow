@@ -10,13 +10,14 @@ import torch
 from utils.utils import rotate_trajs_x_direction
 
 def seq_collate_rat(batch):
-    (past_traj, fut_traj, past_traj_orig, fut_traj_orig, traj_vel, hist_feats, cond_cue) = zip(*batch)
+    (past_traj, fut_traj, past_traj_orig, fut_traj_orig, traj_vel, hist_feats, hist_cond_cue, fut_cond_cue) = zip(*batch)
     pre_motion_3D = torch.stack(past_traj,dim=0)
     fut_motion_3D = torch.stack(fut_traj,dim=0)
     pre_motion_3D_orig = torch.stack(past_traj_orig, dim=0)
     fut_motion_3D_orig = torch.stack(fut_traj_orig, dim=0)
     fut_traj_vel = torch.stack(traj_vel, dim=0)
-    cond_cue = torch.stack(cond_cue, dim=0)
+    hist_cond_cue = torch.stack(hist_cond_cue, dim=0)
+    fut_cond_cue = torch.stack(fut_cond_cue, dim=0)
     hist_feats = torch.stack(hist_feats, dim=0)
 
     batch_size, vertical_size = pre_motion_3D.shape[0], pre_motion_3D.shape[1] ### bt
@@ -32,7 +33,8 @@ def seq_collate_rat(batch):
         'traj_mask': traj_mask,
         'fut_traj_vel': fut_traj_vel,
         'hist_feats': hist_feats,
-        'cond_cue': cond_cue
+        'hist_cond_cue': hist_cond_cue,
+        "fut_cond_cue": fut_cond_cue,
     }
 
     return data 
@@ -93,8 +95,8 @@ class RatDatasetMinMax(Dataset):
                 data_root = os.path.join(data_dir, 'rat_ver2_smooth_3030_2/rat_pose_train.npy')
                 cmd_root = os.path.join(data_dir, 'rat_ver2_smooth_3030_2/rat_stim_train.npy')
             else:
-                data_root = os.path.join(data_dir, 'rat_ver2_smooth_3030_2/rat_pose_test.npy')
-                cmd_root = os.path.join(data_dir, 'rat_ver2_smooth_3030_2/rat_stim_test.npy')
+                data_root = os.path.join(data_dir, 'rat_ver2_smooth_3030_2/rat_pose_val.npy')
+                cmd_root = os.path.join(data_dir, 'rat_ver2_smooth_3030_2/rat_stim_val.npy')
         else:
             data_root = os.path.join(data_dir, 'rat_ver2_smooth_3030_2/rat_pose_train.npy')
             cmd_root = os.path.join(data_dir, 'rat_ver2_smooth_3030_2/rat_stim_train.npy')
@@ -337,8 +339,8 @@ class RatDatasetMinMax(Dataset):
         fut = self.fut_traj_original_scale[index]  # [V,T_p,2]
 
         # 2) cue 的原始输入（示例：你应从日志里读到这两条）
-        instr_id = torch.from_numpy(self.cmd[index, :30, 0])  # [T_h] 0/1/2
-        instr_strength = torch.from_numpy(self.cmd[index, :30, 1])  # [T_h] float
+        instr_id = torch.from_numpy(self.cmd[index, :, 0])  # [T_h + T_f] 0/1/2
+        instr_strength = torch.from_numpy(self.cmd[index, :, 1])  # [T_h + T_f] float
 
         # 3) 计算四个核心特征
         hist_feats = self.compute_hist_feats(past, dt=self.dt, head_idx=self.head_idx, neck_idx=self.neck_idx)  # [V,T_h,C_h]
@@ -355,8 +357,8 @@ class RatDatasetMinMax(Dataset):
             self.fut_traj_vel[index],              # [V,T_p,2]
 
             hist_feats,
-            cue_feats,
-            # z_c
+            cue_feats[:30],  # 历史刺激序列
+            cue_feats[30:],  # 未来刺激序列
         ]
 
     def robust_minmax(self, x, q=(1, 99)):
