@@ -7,6 +7,7 @@ dataset                      : rat
 past_frames                  : 30
 future_frames                : 30
 agents                       : 8
+dt                           : 0.033
 #traj_mean                    : [14, 7.5]
 
 #sqrt_x_a                     : 6.0
@@ -31,7 +32,7 @@ notes                        : 'Flow Matching'
 MODEL:
     NUM_PROPOSED_QUERY: 20
     MODEL_OUT_DIM: 60
-    REGRESSION_MLPS: [128, 256, 60]
+    REGRESSION_MLPS: [128, 256, 64, 2]
     CLASSIFICATION_MLPS: [128, 128, 1]
 
     USE_PE_QUERY: True
@@ -69,7 +70,7 @@ train_batch_size             : 250
 test_batch_size              : 1000
 
 OPTIMIZATION:
-    NUM_EPOCHS: 600
+    NUM_EPOCHS: 300
 
     OPTIMIZER: AdamW
     LR: 0.001

@@ -564,7 +564,8 @@ class Trainer(object):
         start.record()
         pred_trajs = []
         hits_trajs = []
-        cue_trajs = []
+        hist_cond_cue = []
+        fut_cond_cue = []
         fut_trajs = []
 
         for i_batch, data in enumerate(dl): 
@@ -575,7 +576,8 @@ class Trainer(object):
 
             pred_trajs.append(pred_traj)
             hits_trajs.append(data["past_traj_original_scale"])
-            cue_trajs.append(data["cond_cue"])
+            hist_cond_cue.append(data["hist_cond_cue"])
+            fut_cond_cue.append(data["fut_cond_cue"])
             fut_trajs.append(data['fut_traj'])
 
             fut_traj = rearrange(data['fut_traj'], 'b a f d -> (b a) f d')               # [B, A, T, F] -> [B * A, T, F]
@@ -708,11 +710,17 @@ class Trainer(object):
             # print(arr.shape)
             np.save(r"D:\04_code\MoFlow\visualize\trajs\hist_trajs.npy", arr)
 
-            cue_trajs = [item.cpu().detach().numpy() for item in cue_trajs]
+            hist_cond_cue = [item.cpu().detach().numpy() for item in hist_cond_cue]
             # print(cue_trajs[0].shape)
-            arr = np.concatenate(cue_trajs, axis=0)  # 形状变为 (N, T, 2)
+            arr = np.concatenate(hist_cond_cue, axis=0)  # 形状变为 (N, T, 2)
             # print(arr.shape)
-            np.save(r"D:\04_code\MoFlow\visualize\trajs\cue_trajs.npy", arr)
+            np.save(r"D:\04_code\MoFlow\visualize\trajs\hist_cue_trajs.npy", arr)
+
+            fut_cond_cue = [item.cpu().detach().numpy() for item in fut_cond_cue]
+            # print(cue_trajs[0].shape)
+            arr = np.concatenate(fut_cond_cue, axis=0)  # 形状变为 (N, T, 2)
+            # print(arr.shape)
+            np.save(r"D:\04_code\MoFlow\visualize\trajs\fut_cue_trajs.npy", arr)
 
             # fut_trajs = [item.cpu().detach().numpy() for item in fut_gt_trajs]
             fut_trajs_np = []

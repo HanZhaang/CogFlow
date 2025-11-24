@@ -64,21 +64,21 @@ class MTRDecoder(nn.Module):
         cur_query = query_token
         
         for i in range(self.num_blocks):
-            if self.use_adaln:
-                # time modulation
-                shift, scale = self.t_adaLN[i](time_emb).chunk(2, dim=-1)
-                cur_query = modulate(cur_query, shift, scale)       # [B, K, A, D]
+            # if self.use_adaln:
+            #     # time modulation
+            #     shift, scale = self.t_adaLN[i](time_emb).chunk(2, dim=-1)
+            #     cur_query = modulate(cur_query, shift, scale)       # [B, K, A, D]
 
             # K-to-K self-attention
-            cur_query = rearrange(query_token, 'b k a d -> (b a) k d')
+            cur_query = rearrange(query_token, 'b k a t d -> (b a t) k d')
             cur_query = self.self_attn_K[i](cur_query)
 
             # A-to-A self-attention
-            cur_query = rearrange(cur_query, '(b a) k d -> (b k) a d', b=B)
+            cur_query = rearrange(cur_query, '(b a t) k d -> (b k t) a d', b=B, a=A, k=K)
             cur_query = self.self_attn_A[i](cur_query)
 
             # reshape
-            cur_query = rearrange(cur_query, '(b k) a d -> b k a d', b=B)
+            cur_query = rearrange(cur_query, '(b k t) a d -> b k a t d', b=B, a=A, k=K)
 
         return cur_query
     
