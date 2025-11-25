@@ -234,7 +234,7 @@ def main():
 		save_samples=args.save_samples,
 		) ### grid search
 
-	trainer.test(mode='last', eval_on_train=args.eval_on_train)
+	trainer.test(mode='best', eval_on_train=args.eval_on_train)
 
 
 if __name__ == "__main__":

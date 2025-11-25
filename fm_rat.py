@@ -217,7 +217,7 @@ def init_basics(args):
 		if args.batch_size is not None:
 			# override the batch size
 			cfg.train_batch_size = args.batch_size
-			cfg.test_batch_size = args.batch_size * 2  # larger BS for during-training evaluation
+			cfg.test_batch_size = args.batch_size  # larger BS for during-training evaluation
 
 		if args.checkpt_freq is not None:
 			# override the checkpt_freq
@@ -376,5 +376,5 @@ def main():
 if __name__ == "__main__":
 	main()
 
-# python fm_rat.py --exp rat_1123_sde --tied_noise --fm_in_scaling --checkpt_freq 5 --batch_size 512 --init_lr 1e-3
+# python fm_rat.py --exp rat_1124_sde --tied_noise --fm_in_scaling --checkpt_freq 5 --batch_size 128 --init_lr 1e-3
 
