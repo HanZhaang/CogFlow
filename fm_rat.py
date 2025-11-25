@@ -376,5 +376,5 @@ def main():
 if __name__ == "__main__":
 	main()
 
-# python fm_rat.py --exp rat_1124_sde --tied_noise --fm_in_scaling --checkpt_freq 5 --batch_size 128 --init_lr 1e-3
+# python fm_rat.py --exp rat_1125_sde_late_fuse --tied_noise --fm_in_scaling --checkpt_freq 5 --batch_size 128 --init_lr 1e-3
 

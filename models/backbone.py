@@ -318,22 +318,20 @@ class MotionTransformer(nn.Module):
         # emb_in = torch.cat((encoder_out_batch, y_emb, t_emb_batch, cond_bka), dim=-1)
         emb_in = torch.cat((encoder_out_batch, y_emb, t_emb_batch), dim=-1)
         emb_fusion = self.init_emb_fusion_mlp(emb_in)	 	# [B, K, A, D]
-        emb_fusion = emb_fusion.unsqueeze(3).repeat(1, 1, 1, self.T_f, 1) # [B, K, A, T, D]
-        emb_fusion = emb_fusion * (1 + gamma) + beta        # [B, K, A, T, D]
-
-        # # 4) 用 z 对 emb_fusion 做一次 FiLM（仿射）调制
-        # gamma = self.z_gamma(z_bka)  # [B, K, A, D]
-        # beta = self.z_beta(z_bka)  # [B, K, A, D]
-        # emb_fusion = emb_fusion * (1.0 + gamma) + beta  # [B, K, A, D]
-
-        a_pe_batch = a_pe_batch.unsqueeze(3).repeat(1, 1, 1, self.T_f, 1)
-        k_pe_batch = k_pe_batch.unsqueeze(3).repeat(1, 1, 1, self.T_f, 1)
+        # # 11-24 尝试在此处融合，效果显著，出于对比考虑修改
+        # emb_fusion = emb_fusion.unsqueeze(3).repeat(1, 1, 1, self.T_f, 1) # [B, K, A, T, D]
+        # emb_fusion = emb_fusion * (1 + gamma) + beta        # [B, K, A, T, D]
+        # a_pe_batch = a_pe_batch.unsqueeze(3).repeat(1, 1, 1, self.T_f, 1)
+        # k_pe_batch = k_pe_batch.unsqueeze(3).repeat(1, 1, 1, self.T_f, 1)
 
         query_token = self.post_pe_cat_mlp(self.apply_PE(emb_fusion, k_pe_batch, a_pe_batch)) 								# [B, K, A, D]
         # print("query token shape = {}".format(query_token.shape))
         # query_token = rearrange(query_token, 'b k a t d -> b (k a t) d')
         readout_token = self.motion_decoder(query_token, t_emb)													# [B, K, A, D]
         # print("readout token shape = {}".format(readout_token.shape))
+        # # 11-25 尝试在后期融合z
+        readout_token = readout_token.unsqueeze(3).repeat(1, 1, 1, self.T_f, 1) # [B, K, A, T, D]
+        readout_token = readout_token * (1.0 + gamma) + beta  # [B,K,A,T_f,D]
 
         # （8）读出：回归分支输出 T*D，分类分支输出 [B,K,A] 的打分
         denoiser_x = self.reg_head(readout_token)  										# [B, K, A, F * D]
