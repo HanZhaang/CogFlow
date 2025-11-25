@@ -474,9 +474,9 @@ class Trainer(object):
         states_to_save['t'] = []
         states_to_save['y_t'] = []
         states_to_save['y_pred_data'] = []
-        states_to_save['pred_score'] = []
+        # states_to_save['pred_score'] = []
 
-        for i_batch, (t_seq, y_t_seq, y_pred_data, x_data, pred_score) in enumerate(zip(t_seq_ls, y_t_seq_ls, y_pred_data_ls, x_data_ls, pred_score_ls)):
+        for i_batch, (t_seq, y_t_seq, y_pred_data, x_data) in enumerate(zip(t_seq_ls, y_t_seq_ls, y_pred_data_ls, x_data_ls)):
             try:
                 t = t_seq.detach().cpu().numpy().reshape(1, -1)
             except:
@@ -489,8 +489,8 @@ class Trainer(object):
             y_pred_data = y_pred_data.detach().cpu().numpy()
             states_to_save['y_pred_data'].append(y_pred_data)
 
-            pred_score = pred_score.detach().cpu().numpy()
-            states_to_save['pred_score'].append(pred_score)
+            # pred_score = pred_score.detach().cpu().numpy()
+            # states_to_save['pred_score'].append(pred_score)
 
             for key in keys_to_save:
                 x_data_val_ = x_data[key].detach().cpu().numpy()

@@ -131,40 +131,40 @@ def data_preprocess(pred_trajs, hits_trajs, cue_trajs):
 
 if __name__ == "__main__":
     # ['rRP', 'lRP', 'rFP', 'lFP', 'tail_root', 'head', 'neck', 'spine']
-    pred_trajs = np.load("./trajs/pred_trajs.npy")
-    hist_trajs = np.load("./trajs/hist_trajs.npy")
-    cue_trajs = np.load("./trajs/cue_trajs.npy")
-    fut_gt_trajs = np.load("./trajs/fut_gt_trajs.npy")
+    pred_trajs = np.load("./visualize/trajs/pred_trajs.npy")
+    hist_trajs = np.load("./visualize/trajs/hist_trajs.npy")
+    cue_trajs = np.load("./visualize/trajs/hist_cue_trajs.npy")
+    fut_gt_trajs = np.load("./visualize/trajs/fut_gt_trajs.npy")
 
     print("pred_trajs shape = {}".format(pred_trajs.shape))
     print("hist_trajs shape = {}".format(hist_trajs.shape))
     print("cue_trajs shape = {}".format(cue_trajs.shape))
     print("fut_gt_trajs shape = {}".format(fut_gt_trajs.shape))
     # 1 2 3 5 8
-    idx = 1
+    
+    for idx in range(30):
+        history_pos = hist_trajs[idx, 7, :, 0:2]
+        hist_head = hist_trajs[idx, 5, :, 0:2]
+        hist_neck = hist_trajs[idx, 7, :, 0:2]
 
-    history_pos = hist_trajs[idx, 7, :, 0:2]
-    hist_head = hist_trajs[idx, 5, :, 0:2]
-    hist_neck = hist_trajs[idx, 7, :, 0:2]
+        init = hist_trajs[idx, 7, -1:, 0:2]
+        # init = np.expand_dims(init, 0)
+        init = init.repeat(30, 0)
 
-    init = hist_trajs[idx, 7, -1:, 0:2]
-    # init = np.expand_dims(init, 0)
-    init = init.repeat(30, 0)
+        gt_pos = fut_gt_trajs[idx, 7, :, :] + init
 
-    gt_pos = fut_gt_trajs[idx, 7, :, :] + init
+        init = np.expand_dims(init, 0)
+        init = init.repeat(10, 0)
+        preds_pos = pred_trajs[idx, 0:10, 7, :, :] + init
+        # preds_pos = init.tolist().extend(pred_trajs[idx, 0:10, 7, :, :])
 
-    init = np.expand_dims(init, 0)
-    init = init.repeat(10, 0)
-    preds_pos = pred_trajs[idx, 0:10, 7, :, :] + init
-    # preds_pos = init.tolist().extend(pred_trajs[idx, 0:10, 7, :, :])
+        stim_types = cue_trajs[idx, :4]    # (..., 4)
+        stim_types = stim_types.argmax(axis=-1)
 
-    stim_types = cue_trajs[idx, :4]    # (..., 4)
-    stim_types = stim_types.argmax(axis=-1)
-
-    fig, ax = plot_traj_with_heading_and_stim(
-        history_pos, preds_pos, gt_pos,
-        hist_head=hist_neck,
-        hist_neck=hist_neck,
-        stim_types=stim_types
-    )
-    plt.show()
+        fig, ax = plot_traj_with_heading_and_stim(
+            history_pos, preds_pos, gt_pos,
+            hist_head=hist_neck,
+            hist_neck=hist_neck,
+            stim_types=stim_types
+        )
+        plt.savefig("./visualize/viz/visual_{}.png".format(idx))

@@ -66,11 +66,11 @@ denoising_head_preds         : 20
 k_preds                      : 20
 
 # ------------------------------- Optimizer Parameters ---------------------------------
-train_batch_size             : 250
+train_batch_size             : 64
 test_batch_size              : 1000
 
 OPTIMIZATION:
-    NUM_EPOCHS: 300
+    NUM_EPOCHS: 600
 
     OPTIMIZER: AdamW
     LR: 0.001
