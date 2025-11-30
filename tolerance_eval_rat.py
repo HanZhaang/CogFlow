@@ -215,7 +215,6 @@ def main():
 	args = parse_config()
 
 	cfg, logger, tb_log = init_basics(args)
-	logger.basicConfig(level=logger.ERROR)
 
 	train_loader, test_loader = build_data_loader(cfg, args)
 
@@ -235,7 +234,7 @@ def main():
 		save_samples=args.save_samples,
 		) ### grid search
 
-	trainer.test(mode='best', eval_on_train=args.eval_on_train)
+	trainer.tolerance_test(mode='best', eval_on_train=False)
 
 
 if __name__ == "__main__":

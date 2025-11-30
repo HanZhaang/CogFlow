@@ -1,4 +1,4 @@
-
+import logging
 import os 
 import copy
 import math
@@ -22,6 +22,8 @@ from tqdm.auto import tqdm
 
 from utils.utils import set_random_seed
 from utils.normalization import unnormalize_min_max, unnormalize_sqrt, unnormalize_mean_std
+from collections import defaultdict
+import torch.nn.functional as F
 
 
 # helpers functions
@@ -425,6 +427,54 @@ class Trainer(object):
             fut_traj_gt, _, _ = self.eval_dataloader(testing_mode=True, save_trajs=True)
         self.logger.info(f'testing complete with the {mode} ckpt')
 
+    @torch.no_grad()
+    def tolerance_test(self, mode, eval_on_train=False):
+        # init
+        self.logger.info(f'tolerance testing start with the {mode} ckpt')
+
+        set_random_seed(42)
+        print("final path = {}".format(os.path.join(self.cfg.model_dir, 'checkpoint_last.pt')))
+        if mode == 'last':
+            ckpt_states = torch.load(os.path.join(self.cfg.model_dir, 'checkpoint_last.pt'), map_location=self.device,
+                                     weights_only=True)
+        else:
+            ckpt_states = torch.load(os.path.join(self.cfg.model_dir, 'checkpoint_best.pt'), map_location=self.device,
+                                     weights_only=True)
+
+        self.denoiser = self.accelerator.unwrap_model(self.denoiser)
+        self.denoiser.load_state_dict(ckpt_states['model'])
+        if self.accelerator.is_main_process:
+            self.ema.load_state_dict(ckpt_states["ema"])
+
+        # predict_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+        deltas = [i for i in range(-15, 15, 3)]
+        instr_classes = ["L", "F", "R"]
+        none_instr_id= 0
+
+        results = self.estimate_temporal_tolerance(
+            deltas=deltas,
+            instr_classes=instr_classes,
+            none_instr_id=none_instr_id,
+            training_err_check=True, save_trajs=True
+        )
+        print("-------------------")
+        for item in results.keys():
+            print(item, results[item])
+
+        # bin_size = 5  # 或 2 * dt_safe
+        # instr_classes = [1, 2, 3]  # F/L/R
+        #
+        # res_cls = self.estimate_class_tolerance(
+        #     bin_size=bin_size,
+        #     instr_classes=instr_classes,
+        #     none_instr_id=0,
+        # )
+        # print("-------------------")
+        # for item in res_cls.keys():
+        #     print(item, res_cls[item])
+
+        self.logger.info(f'testing complete with the {mode} ckpt')
+
 
     def sample_from_denoising_model(self, data):
         """
@@ -737,6 +787,410 @@ class Trainer(object):
 
         return fut_traj_gt, performance, num_trajs
 
+    @torch.no_grad()
+    def estimate_temporal_tolerance(
+            self,
+            deltas,
+            instr_classes,
+            none_instr_id: int = 0,
+            device: str = "cuda",
+            testing_mode=False, training_err_check=False, save_trajs=False
+    ):
+        """
+        估计时间容错曲线 ΔADE_u(δ)：
+        - 对每个验证样本中的指令事件 (n, tau, u_tau)
+        - 将该事件偏移 delta 帧（tau+delta)，重新预测未来，统计 ADE 增量
+        - 按指令类别 u 和 delta 做平均
 
-  
+        参数：
+        - predict_fn: (hist, cmd) -> pred_fut
+        - val_loader: 迭代器，返回 batch dict
+        - deltas: 例如 [-5, -3, -1, 1, 3, 5]，可包含正负数
+        - hist_len: 历史长度 Th（未来段从 hist_len 开始）
+        - instr_classes: 需要统计的指令类别列表，例如 [1,2,3] (F/L/R)
+        - none_instr_id: 表示“无指令”的 id（通常为 0）
+        - max_events_per_batch: 每个 batch 最多抽多少个指令事件做扰动（控制计算量）
+        - device: 设备
+        - hist_key, fut_key, cmd_key: batch 中的字段名
 
+        返回：
+        - results: dict 包含
+            - 'deltas': list[int]
+            - 'class_ids': list[int]
+            - 'mean_delta_ade': np.ndarray [C, D]  (C=类别数, D=|deltas|)
+            - 'counts': np.ndarray [C, D]
+        """
+        # # turn on the eval mode
+        self.denoiser.eval()
+        self.ema.ema_model.eval()
+        self.logger.info(f'Estimated time tolerance curve')
+
+        # 加载数据集
+        self.logger.info(f'Start recording validation set ADE/FDE...')
+        status = 'val'
+        dl = self.val_loader
+
+        # 统计指令类别
+        instr_classes = list(instr_classes)
+        num_classes = len(instr_classes)
+        deltas = list(deltas)
+        num_deltas = len(deltas)
+
+        # 类别 id -> 索引
+        class2idx = {c: i+1 for i, c in enumerate(instr_classes)}
+        delta2idx = {d: i for i, d in enumerate(deltas)}
+
+        # 累计器
+        sum_delta_ade = torch.zeros(num_classes, num_deltas, device=device)
+        cnt_delta_ade = torch.zeros(num_classes, num_deltas, device=device)
+
+        def compute_agent_ADE_minK(pred_traj, fut_traj):
+            """
+            pred_traj: [BA, K, T, D]
+            fut_traj:  [BA,    T, D]
+            返回：ade_min: [BA]
+            """
+            # [BA, K, T, D] - [BA, 1, T, D] -> [BA, K, T, D]
+            diff = pred_traj - fut_traj.unsqueeze(1)
+            # L2 over coord
+            l2 = torch.norm(diff, dim=-1)  # [BA, K, T]
+            ade_k = l2.mean(dim=-1)  # [BA, K]
+            ade_min, _ = ade_k.min(dim=1)  # [BA]
+            return ade_min
+
+        def recompute_time_since_last_cmd(fut_cond):
+            # fut_cond: [B, T, C]
+            B, T, C = fut_cond.shape
+            fut_cond = fut_cond.clone()
+            for b in range(B):
+                last_cmd_step = None
+                for t in range(T):
+                    # 判定当前步是否有“有效指令”（非“无指令”类）
+                    cmd_cls = fut_cond[b, t, :4].argmax().item()
+                    if cmd_cls != 0:  # 0 类表示“无指令”
+                        last_cmd_step = t
+                    if last_cmd_step is None:
+                        fut_cond[b, t, 6] = 0.0
+                    else:
+                        fut_cond[b, t, 6] = float(t - last_cmd_step)
+            return fut_cond
+
+        for i_batch, data in enumerate(dl):
+            # 取数据并搬到 device
+            B = int(data['batch_size'])
+            fut_cond_cue = data["fut_cond_cue"]
+
+            data = {k: v.to(self.device) for k, v in data.items()}
+
+            Th = self.cfg.future_frames
+            Tf = self.cfg.past_frames
+            T_total = Th + Tf
+
+            # 基线预测（真实指令，不偏移）
+            # base_pred = predict_fn(hist, cmd)  # [B,Tf,...]
+            pred_traj, pred_traj_t, t_seq, y_t_seq, pred_score = self.sample_from_denoising_model(data)
+
+            fut_traj = rearrange(data['fut_traj'], 'b a f d -> (b a) f d')  # [B, A, T, F] -> [B * A, T, F]
+            fut_traj_gt = fut_traj.unsqueeze(1).repeat(1, self.cfg.denoising_head_preds, 1, 1)  # [B * A, K, T, F]
+            print("fut_traj_gt shape = {}".format(fut_traj_gt.shape))
+            print("pred_traj shape = {}".format(pred_traj.shape))
+            distances = (fut_traj_gt - pred_traj).norm(p=2, dim=-1)                                     # [B * A, K, T]
+            # distances_t = (pred_traj_t - fut_traj_gt.unsqueeze(1)).norm(p=2, dim=-1)  # [B * A, S, K, T]
+            # ade_base,_,_,_ = self.compute_ADE_FDE(distances, self.cfg.future_frames)       # 4 * [S], denoising steps
+            ade_base = compute_agent_ADE_minK(pred_traj, fut_traj)  # [BA]
+            print("ade_base shape = {}".format(ade_base))
+
+            # 在未来段内寻找所有“有指令”的事件 (n, tau)
+            # tau: 相对于整体 cmd 序列的 index，范围 [Th, Th+Tf-1]
+            events = []  # list of (n, tau, instr_id)
+            for n in range(B):
+                # 提取未来部分的 cmd
+                fut_cmd = fut_cond_cue[n, ...]  # [Tf]
+                print("fut_cmd shape = {}".format(fut_cmd.shape))
+                # print("fut_cmd = {}".format(fut_cmd))
+                # 找到非 none_instr_id 的位置
+                idx = (fut_cmd[:, none_instr_id] != 1).nonzero(as_tuple=False).view(-1)
+                print("idx = {}".format(idx))
+                for tau in idx.tolist():
+                    print("one hot = {}".format(fut_cond_cue[n, tau, :4]))
+                    instr_id = int(fut_cond_cue[n, tau, :4].argmax(dim=-1))
+                    print("instr_id = {}".format(instr_id))
+                    print("class2idx = {}".format(class2idx))
+                    if instr_id in class2idx.values():
+                        # 增加一个事件，格式为batch内的编号n，相对时间戳tau，指令类别instr_id
+                        events.append((n, tau, instr_id))
+
+            # 1. 按指令类别把 events 分组：instr_id -> list[(n, tau)]
+            events_by_class = defaultdict(list)
+            for (n, tau, instr_id) in events:
+                events_by_class[instr_id].append((n, tau))
+
+            device = fut_cond_cue.device
+            dtype = fut_cond_cue.dtype
+            onehot_empty = torch.tensor([1, 0, 0, 0, 0, 0, 0], dtype=dtype, device=device)
+
+            # 2. 遍历每一类指令 & 每个 delta
+            for instr_id, ev_list in events_by_class.items():
+                class_idx = instr_id  # 你的代码里就是用这个作为类别
+                print("instr_id = {} ev_list = {}".format(instr_id, ev_list))
+                if len(ev_list) == 0:
+                    continue
+
+                # 把这一类指令对应的所有 n, tau 拉成向量，方便批量索引
+                n_list = torch.tensor([e[0] for e in ev_list], dtype=torch.long, device=device)
+                tau_list = torch.tensor([e[1] for e in ev_list], dtype=torch.long, device=device)
+
+                # 对应的 baseline ADE，一次性取出来
+                base_ade_vec = ade_base[n_list]  # shape [Ne], Ne = 当前类别的 event 数
+
+                for d in deltas:
+                    delta_idx = delta2idx[d]
+
+                    # 计算偏移后的 new_tau，并筛掉非法的
+                    new_tau_list = tau_list + d
+                    valid_mask = (new_tau_list >= 0) & (new_tau_list < Tf)
+                    if not valid_mask.any():
+                        continue
+
+                    n_valid = n_list[valid_mask]  # [Nv]
+                    tau_valid = tau_list[valid_mask]  # [Nv]
+                    new_tau_valid = new_tau_list[valid_mask]  # [Nv]
+                    base_ade_valid = base_ade_vec[valid_mask]
+
+                    # 3. 构造这一类 + 这个 delta 的整体扰动序列
+                    fut_cond_perturb = fut_cond_cue.clone()  # [N, T, C] 或 [B*A, T, C]
+
+                    # (1) 把原 tau 的指令复制到 new_tau 的位置
+                    fut_cond_perturb[n_valid, new_tau_valid, :] = fut_cond_cue[n_valid, tau_valid, :]
+
+                    # (2) 原 tau 位置清空为 "无指令"（onehot_empty）
+                    fut_cond_perturb[n_valid, tau_valid, :] = onehot_empty
+                    recompute_time_since_last_cmd(fut_cond_perturb)
+
+                    # 4. 一次性评估这一类所有 event 在该 delta 下的影响
+                    data_perturb = dict(data)
+                    data_perturb['fut_cond_cue'] = fut_cond_perturb
+
+                    pred_traj_perturb, _, _, _, _ = self.sample_from_denoising_model(data_perturb)
+                    ade_perturb = compute_agent_ADE_minK(pred_traj_perturb, fut_traj)  # [N]，与 ade_base 对齐
+
+                    ade_perturb_valid = ade_perturb[n_valid]  # 只取当前类、当前 delta 里有效的那些 n
+                    delta_ades = ade_perturb_valid - base_ade_valid  # [Nv]
+
+                    # 5. 把这一类 + 这个 delta 下所有 event 的贡献累加进统计量
+                    sum_delta_ade[class_idx - 1, delta_idx] += delta_ades.sum().item()
+                    cnt_delta_ade[class_idx - 1, delta_idx] += float(delta_ades.numel())
+
+        if (i_batch + 1) % 10 == 0:
+            self.logger.info(f"[TemporalTol] processed batch {i_batch+1}/{len(dl)} "
+                             f"(acc events: {int(cnt_delta_ade.sum().item())})")
+
+        # 汇总结果
+        mean_delta_ade = torch.zeros_like(sum_delta_ade)
+        mask = cnt_delta_ade > 0
+        mean_delta_ade[mask] = sum_delta_ade[mask] / cnt_delta_ade[mask]
+
+        results = {
+            "deltas": deltas,
+            "class_ids": instr_classes,
+            "mean_delta_ade": mean_delta_ade.detach().cpu().numpy(),  # [C,D]
+            "counts": cnt_delta_ade.detach().cpu().numpy(),  # [C,D]
+        }
+        return results
+
+    @torch.no_grad()
+    def estimate_class_tolerance(
+            self,
+            bin_size: int,
+            instr_classes,
+            none_instr_id: int = 0,
+            device: str = "cuda",
+            testing_mode=False, training_err_check=False, save_trajs=False
+    ):
+        """
+        第二阶段：类别容错统计 ΔADE_b(u -> u')。
+
+        思路：
+        - 用 bin_size (≈ δt_safe 或 2δt_safe) 将未来时间 [0, T_fut-1] 划分为若干个 bin
+        - 对每个指令事件 (n, tau, u_tau)，确定所属 bin: b = floor(tau / bin_size)
+        - 在该 bin 内，把所有类别为 u 的事件一次性替换为 u'，重新预测未来轨迹
+        - 统计 ADE 增量，并按 (bin, u, u') 求平均
+
+        参数：
+        - bin_size: 每个 bin 的长度（帧数）
+        - instr_classes: 需要统计的“有效指令”类别列表，如 [1,2,3] (F/L/R)
+        - none_instr_id: “无指令”类别 id，一般为 0
+        - device: 设备
+
+        返回：
+        results: dict
+            - 'bin_size': int
+            - 'bin_ranges': List[(start_t, end_t)] 每个 bin 覆盖的时间范围（闭区间）
+            - 'class_ids': list[int] 与 instr_classes 一致
+            - 'mean_delta_ade': np.ndarray [num_bins, C, C]
+            - 'counts': np.ndarray [num_bins, C, C]
+        """
+
+        # turn on eval
+        self.denoiser.eval()
+        self.ema.ema_model.eval()
+        self.logger.info(f'[ClassTol] Estimate class tolerance ΔADE_b(u → u\')')
+
+        # 加载验证集
+        self.logger.info(f'[ClassTol] Start recording validation set ADE/FDE on val set...')
+        status = 'val'
+        dl = self.val_loader
+
+        # 类别 / 索引映射（保持和时间容错阶段风格一致）
+        instr_classes = list(instr_classes)
+        num_classes = len(instr_classes)
+        class2idx = {c: i + 1 for i, c in enumerate(instr_classes)}  # 类别id -> 1..C
+
+        # 先初始化“全局”统计容器，需要知道 num_bins，所以我们先等第一批数据出来
+        sum_delta_ade = None  # shape [num_bins, C, C]
+        cnt_delta_ade = None  # same
+
+        def compute_agent_ADE_minK(pred_traj, fut_traj):
+            """
+            pred_traj: [BA, K, T, D]
+            fut_traj:  [BA,    T, D]
+            返回：ade_min: [BA]
+            """
+            diff = pred_traj - fut_traj.unsqueeze(1)  # [BA, K, T, D]
+            l2 = torch.norm(diff, dim=-1)  # [BA, K, T]
+            ade_k = l2.mean(dim=-1)  # [BA, K]
+            ade_min, _ = ade_k.min(dim=1)  # [BA]
+            return ade_min
+
+        # ------------------------ 遍历 batch ------------------------
+        total_events = 0
+        for i_batch, data in enumerate(dl):
+            B = int(data['batch_size'])
+            # fut_cond_cue = data["fut_cond_cue"]  # [B, T_fut, C]
+            # fut_cond_cue = fut_cond_cue.to(self.device)
+
+            # 其余字段搬到 device
+            data = {k: (v.to(self.device) if isinstance(v, torch.Tensor) else v)
+                    for k, v in data.items()}
+            fut_cond_cue = data['fut_cond_cue']
+
+            # 未来轨迹长度 & bin 数量
+            T_fut = fut_cond_cue.shape[1]
+            num_bins_batch = (T_fut + bin_size - 1) // bin_size
+
+            # 初始化全局统计容器（只需要一次）
+            if sum_delta_ade is None:
+                sum_delta_ade = torch.zeros(
+                    num_bins_batch, num_classes, num_classes, device=device
+                )
+                cnt_delta_ade = torch.zeros(
+                    num_bins_batch, num_classes, num_classes, device=device
+                )
+                num_bins = num_bins_batch
+            else:
+                assert num_bins_batch == sum_delta_ade.size(0), \
+                    "所有 batch 的未来长度应该相同，以保证 num_bins 一致"
+
+            # ---------- 1. 基线预测 ----------
+            pred_traj, pred_traj_t, t_seq, y_t_seq, pred_score = \
+                self.sample_from_denoising_model(data)
+
+            fut_traj = rearrange(data['fut_traj'], 'b a f d -> (b a) f d')
+            fut_traj_gt = fut_traj  # [BA, T, D]
+            ade_base = compute_agent_ADE_minK(pred_traj, fut_traj_gt)  # [BA]，与 batch 内 n 索引对齐（B == BA）
+
+            # ---------- 2. 收集事件：所有“有指令”的 (n, tau, instr_id, bin_id) ----------
+            events_by_bin_class = defaultdict(list)  # (bin_id, instr_id) -> [(n, tau), ...]
+
+            for n in range(B):
+                fut_cmd = fut_cond_cue[n, ...]  # [T_fut, C]
+                # 非 none_instr 的位置
+                idx = (fut_cmd[:, none_instr_id] != 1).nonzero(as_tuple=False).view(-1)
+                for tau in idx.tolist():  # tau: 0..T_fut-1
+                    instr_id = int(fut_cmd[tau, :4].argmax(dim=-1))
+                    if instr_id not in class2idx.values():
+                        continue
+                    bin_id = tau // bin_size
+                    events_by_bin_class[(bin_id, instr_id)].append((n, tau))
+                    total_events += 1
+
+            if (i_batch + 1) % 10 == 0:
+                self.logger.info(f"[ClassTol] collected events: "
+                                 f"batch {i_batch + 1}/{len(dl)}, total_events={total_events}")
+
+            # 若没有事件，跳过
+            if len(events_by_bin_class) == 0:
+                continue
+
+            # ---------- 3. 遍历每个 (bin, 原始类别 u) 组合 ----------
+            device = fut_cond_cue.device
+            dtype = fut_cond_cue.dtype
+
+            for (bin_id, instr_id), ev_list in events_by_bin_class.items():
+                if len(ev_list) == 0:
+                    continue
+
+                class_idx = instr_id  # 1..C
+                c_from = class_idx - 1
+
+                # 当前 bin + 当前原始类别的所有 (n, tau)
+                n_list = torch.tensor([e[0] for e in ev_list], dtype=torch.long, device=device)
+                tau_list = torch.tensor([e[1] for e in ev_list], dtype=torch.long, device=device)
+
+                base_ade_vec = ade_base[n_list]  # [Ne]
+
+                # ---------- 4. 对每个目标类别 u' 做一次整体替换 ----------
+                for target_id in class2idx.values():  # 遍历 F/L/R 等
+                    if target_id == instr_id:
+                        continue  # 不需要替换成自身
+
+                    c_to = target_id - 1
+
+                    # 构造 one-hot 目标类别（只改前 4 维）
+                    onehot_target = F.one_hot(
+                        torch.tensor(target_id, device=device),
+                        num_classes=4
+                    ).float()  # [4]
+
+                    # (1) 构造扰动后的 fut_cond_cue 副本
+                    fut_cond_perturb = fut_cond_cue.clone()  # [B, T_fut, C]
+                    fut_cond_perturb[n_list, tau_list, :4] = onehot_target  # 同一时刻改类别
+
+                    # (2) 重新预测
+                    data_perturb = dict(data)
+                    data_perturb['fut_cond_cue'] = fut_cond_perturb
+
+                    pred_traj_perturb, _, _, _, _ = \
+                        self.sample_from_denoising_model(data_perturb)
+                    ade_perturb = compute_agent_ADE_minK(
+                        pred_traj_perturb, fut_traj_gt
+                    )  # [BA]
+
+                    ade_perturb_vec = ade_perturb[n_list]  # [Ne]
+
+                    # (3) 事件级 ΔADE，并累加到 (bin_id, u -> u') 上
+                    delta_ades = ade_perturb_vec - base_ade_vec  # [Ne]
+                    sum_delta_ade[bin_id, c_from, c_to] += delta_ades.sum().item()
+                    cnt_delta_ade[bin_id, c_from, c_to] += float(delta_ades.numel())
+
+        # ------------------------ 4. 汇总统计 ------------------------
+        mean_delta_ade = torch.zeros_like(sum_delta_ade)
+        mask = cnt_delta_ade > 0
+        mean_delta_ade[mask] = sum_delta_ade[mask] / cnt_delta_ade[mask]
+
+        # bin 覆盖范围（闭区间），方便后续画图标注
+        bin_ranges = []
+        for b in range(sum_delta_ade.size(0)):
+            start_t = b * bin_size
+            end_t = min((b + 1) * bin_size - 1, T_fut - 1)
+            bin_ranges.append((int(start_t), int(end_t)))
+
+        results = {
+            "bin_size": bin_size,
+            "bin_ranges": bin_ranges,  # List[(start_t, end_t)]
+            "class_ids": instr_classes,
+            "mean_delta_ade": mean_delta_ade.detach().cpu().numpy(),  # [B,C,C]
+            "counts": cnt_delta_ade.detach().cpu().numpy(),  # [B,C,C]
+        }
+        self.logger.info(f"[ClassTol] Done. total_events = {total_events}")
+        return results
