@@ -256,7 +256,7 @@ class FlowMatcher(nn.Module):
                 if this_t == 0.0:
                     self.logger.info("{}".format("-" * 50))
                 # self.logger.info("Sampling time step: {:.3f}, batch minADE approx: {:.4f}".format(this_t, batch_min_ade_approx))
-                self.logger.info("Sampling time step: {:.3f}".format(this_t))
+                # self.logger.info("Sampling time step: {:.3f}".format(this_t))
 
             pred_vel = self.predict_vel_from_data(y_data_at_t, y_t, t)
 
