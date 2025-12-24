@@ -1,4 +1,5 @@
 import os
+os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 import torch
 import argparse
 import copy
@@ -8,8 +9,8 @@ from tensorboardX import SummaryWriter
 # from data.dataloader_nba import NBADatasetMinMax as NBADatasetMinMax
 # from data.dataloader_nba import seq_collate_nba
 
-from data.dataloader_rat import RatDatasetMinMax as RatDatasetMinMax
-from data.dataloader_rat import seq_collate_rat
+from data.dataloader_babel import BabelDatasetMinMax as BabelDatasetMinMax
+from data.dataloader_babel import seq_collate_rat
 
 from utils.config import Config
 from utils.utils import back_up_code_git, set_random_seed, log_config_to_file
@@ -27,16 +28,16 @@ def parse_config():
 	parser = argparse.ArgumentParser()
 
 	# Basic configuration
-	parser.add_argument('--cfg', default='cfg/rat/cor_fm.yml', type=str, help="Config file path")
+	parser.add_argument('--cfg', default='cfg/babel/cor_fm.yml', type=str, help="Config file path")
 	parser.add_argument('--exp', default='', type=str, help='Experiment description for each run, name of the saving folder.')
 
 	# Data configuration
 	parser.add_argument('--epochs', default=None, type=int, help='Override the number of epochs in the config file.')
-	parser.add_argument('--batch_size', default=256, type=int, help='Override the batch size in the config file.')
-	parser.add_argument('--data_dir', type=str, default='./data/rat', help='Directory where the data is stored.')
+	parser.add_argument('--batch_size', default=128, type=int, help='Override the batch size in the config file.')
+	parser.add_argument('--data_dir', type=str, default='./data/babel', help='Directory where the data is stored.')
 	parser.add_argument('--overfit', default=False, action='store_true', help='Overfit the testing set by setting it to the same entries as the training set.')
-	parser.add_argument('--n_train', type=int, default=414, help='Number training scenes used.')
-	parser.add_argument('--n_test', type=int, default=118, help='Number testing scenes used.')
+	parser.add_argument('--n_train', type=int, default=9536, help='Number training scenes used.')
+	parser.add_argument('--n_test', type=int, default=2724, help='Number testing scenes used.')
 	parser.add_argument('--rotate', default=False, action='store_true', help='Whether to rotate the data to canonical x-axis or not.')
 	parser.add_argument('--checkpt_freq', default=5, type=int, help='Override the checkpt_freq in the config file.')
 	parser.add_argument('--max_num_ckpts', default=5, type=int, help='Override the max_num_ckpts in the config file.')
@@ -235,6 +236,8 @@ def init_basics(args):
 	### voila, create the saving directory ###
 	tag = tag.replace('__', '_')
 	cfg.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+	# cfg.device = torch.device("cpu")
+
 	logger = cfg.create_dirs(tag_suffix=tag)
 
 
@@ -261,7 +264,7 @@ def build_data_loader(cfg, args):
 	"""
 	Build the data loader for the Rat dataset.
 	"""
-	train_dset = RatDatasetMinMax(
+	train_dset = BabelDatasetMinMax(
 		data_dir=args.data_dir,
 		obs_len=cfg.past_frames,
 		pred_len=cfg.future_frames,
@@ -283,7 +286,7 @@ def build_data_loader(cfg, args):
 	if args.overfit:
 		test_dset = copy.deepcopy(train_dset)
 	else:
-		test_dset = RatDatasetMinMax(
+		test_dset = BabelDatasetMinMax(
 		data_dir=args.data_dir,
 		obs_len=cfg.past_frames,
 		pred_len=cfg.future_frames,
@@ -342,7 +345,16 @@ def main():
 	# 构建数据加载器
 	train_loader, test_loader = build_data_loader(cfg, args)
 	# 构建模型网络
-	denoiser = build_network(cfg, args, logger)
+	denoiser = build_network(cfg, args, logger).to(device=cfg.device)
+
+	# # 1) 先把全模型都冻住
+	# set_requires_grad(denoiser, False)
+	#
+	# # 2) 只打开以下几块（Stage A）
+	# set_requires_grad(denoiser.model.z_encoder.head_z, True)  # 只训练 z 头
+	# set_requires_grad(denoiser.model.z_proj, True)
+	# set_requires_grad(denoiser.model.z_gamma, True)
+	# set_requires_grad(denoiser.model.z_beta, True)
 
 	"""Train the model"""
 	trainer = Trainer(
@@ -367,5 +379,5 @@ def main():
 if __name__ == "__main__":
 	main()
 
-# python fm_rat.py --exp rat_1211_sde_early_fuse --tied_noise --fm_in_scaling --checkpt_freq 5 --batch_size 128 --init_lr 1e-3
+# python fm_babel.py --exp rat_1203_CNDS_babel --tied_noise --fm_in_scaling --checkpt_freq 5 --batch_size 128 --init_lr 1e-3
 
