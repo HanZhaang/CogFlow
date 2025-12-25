@@ -216,10 +216,7 @@ def main():
 
 
 if __name__ == "__main__":
-	import time
-	time1 = time.time()
 	main()
-	time2 = time.time()
-	print(time2 - time1)
 
-# python eval_rat.py --cfg /root/CogFlow/cfg/full_cfg/cor_eval.yml
+
+# python eval_rat.py --cfg /root/CogFlow/cfg/full_cfg/cor_rat_eval.yml

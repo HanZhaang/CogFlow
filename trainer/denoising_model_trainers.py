@@ -24,6 +24,7 @@ from utils.utils import set_random_seed
 from utils.normalization import unnormalize_min_max, unnormalize_sqrt, unnormalize_mean_std
 from collections import defaultdict
 import torch.nn.functional as F
+from utils.pred_future_io import save_pred_fut
 
 
 # helpers functions
@@ -409,7 +410,6 @@ class Trainer(object):
         self.logger.info(f'testing start with the {mode} ckpt')
 
         set_random_seed(42)
-        print("final path = {}".format(self.cfg.ckpt_path))
         ckpt_states = torch.load(self.cfg.ckpt_path, map_location=self.device, weights_only=True)
 
         self.denoiser = self.accelerator.unwrap_model(self.denoiser)
@@ -422,6 +422,7 @@ class Trainer(object):
             fut_traj_gt, _, _ = self.eval_dataloader(training_err_check=True, save_trajs=True)
         else:
             fut_traj_gt, _, _ = self.eval_dataloader(testing_mode=True, save_trajs=True)
+        
         self.logger.info(f'testing complete with the {mode} ckpt')
 
     @torch.no_grad()
@@ -748,9 +749,9 @@ class Trainer(object):
                 pred_trajs_np.append(item)
 
             # print(pred_trajs_np[0].shape)
-            arr = np.concatenate(pred_trajs_np, axis=0)  # 形状变为 (N, T, 2)
-            # print(arr.shape)
-            np.save(r"D:\04_code\MoFlow\visualize\trajs\pred_trajs.npy", arr)
+            pred_trajs_np = np.concatenate(pred_trajs_np, axis=0)  # 形状变为 (N, T, 2)
+            print("pred shape = {}".format(pred_trajs_np.shape))
+            # np.save(r"D:\04_code\MoFlow\visualize\trajs\pred_trajs.npy", pred_trajs_np)
 
             hits_trajs = [item.cpu().detach().numpy() for item in hits_trajs]
             # print(hits_trajs[0].shape)
@@ -779,9 +780,16 @@ class Trainer(object):
                 item = item.detach().numpy()
                 fut_trajs_np.append(item)
 
-            arr = np.concatenate(fut_trajs_np, axis=0)  # 形状变为 (N, T, 2)
-            print(arr.shape)
-            np.save(r"D:\04_code\MoFlow\visualize\trajs\fut_gt_trajs.npy", arr)
+            fut_trajs_np = np.concatenate(fut_trajs_np, axis=0)  # 形状变为 (N, T, 2)
+            print("fut_trajs_np shape = {}".format(fut_trajs_np.shape))
+            # np.save(r"D:\04_code\MoFlow\visualize\trajs\fut_gt_trajs.npy", arr)
+            
+            save_pred_fut(
+                save_path = os.path.join(self.cfg.npz_dir, self.cfg.dataset + "_" + self.cfg.MODEL.NAME + ".npz"),
+                pred = pred_trajs_np,   # (N,B,K,A,F,D)
+                fut = fut_trajs_np,    # (N,B,A,F,D)
+                compress = True
+            )
 
         return fut_traj_gt, performance, num_trajs
 

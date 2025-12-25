@@ -12,8 +12,8 @@ checkpt_freq                 : 10
 data_dir: './data/rat'
 
 overfit: False
-n_train: 4144
-n_test: 1181
+n_train: 414
+n_test: 118
 rotate: False
 data_norm: 'min_max'
 eval_on_train: False
