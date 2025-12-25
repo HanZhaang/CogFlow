@@ -64,13 +64,9 @@ def init_basics(args):
 	"""
 
 	"""Load the config file"""
-	result_dir = os.path.abspath(os.path.join(args.ckpt_path, '../../'))
-	if args.cfg == 'auto':
-		yml_ls = glob(result_dir+'/*.yml')
-		assert len(yml_ls) >= 1, 'At least one config file should be found in the directory.'
-		yml_path = [f for f in yml_ls if '_updated.yml' in os.path.basename(f)][0]
-		args.cfg = yml_path
+
 	cfg = Config(args.cfg, f'{args.exp}', train_mode=False)
+	result_dir = os.path.abspath(os.path.join(cfg.ckpt_path, '../../'))
 
 	tag = '_'
 
@@ -245,4 +241,4 @@ if __name__ == "__main__":
 	time2 = time.time()
 	print(time2 - time1)
 
-# python eval_rat.py --ckpt_path /root/CogFlow/results_rat/imle/1211_best_rat_imle_IMLE_gen_set_M_10_load_enc_GT_0.00_Chamfer_1.00_REG_S_subset4144_min_max_LR0.001_WD0.05_BS10_EP50/models/checkpoint_best.pt --batch_size 16 --sampling_steps 100 --solver lin_poly --lin_poly_p 5 --lin_poly_long_step 1000 --save_samples
+# python eval_rat.py --cfg /root/CogFlow/cfg/full_cfg/cor_eval.yml

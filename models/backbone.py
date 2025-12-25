@@ -25,6 +25,7 @@ class MotionTransformer(nn.Module):
         assert not use_pre_norm, "Pre-norm is not supported in this model"
         self.T_f = self.config.get('future_frames', 0)
         self.dt = self.config.get('dt', 0)
+        self.agent_dim = self.model_cfg.AGENT_DIM
         # （1）上下文编码器：把历史轨迹/邻居信息编码成每个 agent 的上下文向量
         self.context_encoder = build_context_encoder(self.model_cfg.CONTEXT_ENCODER, use_pre_norm, config.device)
 
@@ -54,7 +55,7 @@ class MotionTransformer(nn.Module):
 
         self.z0_encoder = Z0Encoder(
             num_keypoints=self.config.agents,
-            kp_dim=6,
+            kp_dim=self.agent_dim * 3,
             stim_dim=self.model_cfg.get('COND_D_CUE', 0),
             hidden_dim=self.dim,
             z_dim=self.model_cfg.get('COG_D_Z', 0)

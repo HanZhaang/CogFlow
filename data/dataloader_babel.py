@@ -398,3 +398,55 @@ def _safe_div(a, b, eps=1e-6):
 def _wrap_pi(a):
     # wrap angle to [-pi, pi]
     return (a + torch.pi) % (2 * torch.pi) - torch.pi
+
+import copy
+from data.dataset_registry import register_dataset
+from torch.utils.data import DataLoader
+
+@register_dataset("babel_dataset")
+def build_babel_dataloader(cfg, args):
+	"""
+	Build the data loader for the Rat dataset.
+	"""
+	train_dset = BabelDatasetMinMax(
+		data_dir=cfg.data_dir,
+		obs_len=cfg.past_frames,
+		pred_len=cfg.future_frames,
+		training=True,
+		num_scenes=cfg.n_train,
+		overfit=cfg.overfit,
+		cfg=cfg,
+		# rotate=cfg.rotate,
+		data_norm=cfg.data_norm)
+
+	train_loader = DataLoader(
+		train_dset,
+		batch_size=cfg.train_batch_size,
+		shuffle=True,
+		num_workers=4,
+		collate_fn=seq_collate_rat,
+		pin_memory=True)
+
+	if cfg.overfit:
+		test_dset = copy.deepcopy(train_dset)
+	else:
+		test_dset = BabelDatasetMinMax(
+		data_dir=cfg.data_dir,
+		obs_len=cfg.past_frames,
+		pred_len=cfg.future_frames,
+		training=False,
+		overfit=cfg.overfit,
+		test_scenes=cfg.n_test,
+		cfg=cfg,
+		# rotate=cfg.rotate,
+		data_norm=cfg.data_norm)
+		
+	test_loader = DataLoader(
+		test_dset,
+		batch_size=cfg.test_batch_size, ### change it from 500 
+		shuffle=False,
+		num_workers=4,
+		collate_fn=seq_collate_rat,
+		pin_memory=True)
+	
+	return train_loader, test_loader

@@ -15,6 +15,9 @@ from utils.normalization import unnormalize_min_max, unnormalize_sqrt, unnormali
 from utils.utils import apply_mask
 from utils.utils import LossBuffer
 
+from models.model_registry import register_model
+from models.backbone import MotionTransformer
+
 ModelPrediction = namedtuple('ModelPrediction', ['pred_vel', 'pred_data', 'pred_score'])
 
 
@@ -520,3 +523,25 @@ class FlowMatcher(nn.Module):
         self.cfg.stats["fut_mean"] = self.cfg.stats["fut_mean"].cuda()
         self.cfg.stats["fut_std"] = self.cfg.stats["fut_std"].cuda()
         return self.p_losses(x, log_dict)
+
+@register_model("cogflow")
+def build_cogflow(cfg, args, logger):
+	"""
+	Build the network for the denoising model.
+	"""
+	model = MotionTransformer(
+		model_config=cfg.MODEL,
+		logger=logger,
+		config=cfg,
+	)
+
+	if cfg.denoising_method == 'fm':
+		denoiser = FlowMatcher(
+			cfg,
+			model,
+			logger=logger,
+		)
+	else:
+		raise NotImplementedError(f'Denoising method [{cfg.denoising_method}] is not implemented yet.')
+
+	return denoiser
