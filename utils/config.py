@@ -36,12 +36,15 @@ class Config:
 
         self.model_dir = '%s/models' % self.cfg_dir
         self.log_dir = '%s/log' % self.cfg_dir
+        self.npz_dir = '%s/npz' % self.cfg_dir
         self.sample_dir = '%s/samples' % self.cfg_dir
         self.model_path = os.path.join(self.model_dir, 'model_%04d.p')
 
         os.makedirs(self.sample_dir, exist_ok=True)
         os.makedirs(self.model_dir, exist_ok=True)
         os.makedirs(self.log_dir, exist_ok=True)
+        os.makedirs(self.npz_dir, exist_ok=True)
+        
         self.model_files = glob.glob(os.path.join(self.model_dir, 'model_*.p'))
 
         if self.train_mode:
