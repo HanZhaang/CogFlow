@@ -4,33 +4,71 @@ results_root_dir             : results_rat
 dataset                      : rat
 
 # ------------------- Dataset -------------------------
+dataset_name: rat_dataset
+num_workers : 4
 past_frames                  : 30
 future_frames                : 30
 agents                       : 8
 dt                           : 0.033
-#traj_mean                    : [14, 7.5]
-
-#sqrt_x_a                     : 6.0
-#sqrt_x_b                     : 0.0
-#sqrt_y_a                     : 4.0
-#sqrt_y_b                     : 0.0
-
 checkpt_freq                 : 10
+data_dir: './data/rat'
 
-# -------------------- Flow matching config -----------------------------
+overfit: False
+n_train: 4144
+n_test: 1181
+rotate: False
+data_norm: 'min_max'
+
+# ---------------- checkpoint save ----------------
+checkpt_freq: 5
+max_num_ckpts: 5
+load_pretrained: False
+ckpt_path: null 
+
+# ---------------- pub hyper para ----------------
+
+fix_random_seed: True
+seed: 42
+init_lr: 0.001
+
+# ------------------- per hyper para -------------------------
+
 denoising_method             : 'fm'
 sampling_steps               : 10
 t_schedule                   : 'logit_normal'
 objective                    : 'pred_data'
 sigma_data                   : 0.13
 
+sampling_steps: 10
+t_schedule: "logit_normal" # choices=['uniform', 'logit_normal']
+fm_skewed_t: null 
+logit_norm_mean: -0.5
+logit_norm_std: 1.5
+
+fm_wrapper: 'direct' # choices=['direct', 'velocity', 'precond']
+fm_rew_sqrt: False 
+fm_in_scaling: True
+
+drop_method: "emb"
+drop_logi_k: 20.0 # Logistic growth rate for masking rate at different timesteps.
+drop_logi_m: 0.5  # Logistic midpoint for masking rate at different timesteps.
+
+use_pre_norm: False # Where to normalize the input trajectories in the Transformer Encoders.
+tied_noise: True
+
+LOSS_NN_MODE: 'agent' # choices=['agent', 'scene', 'both']
+LOSS_REG_REDUCTION: 'sum' # ['mean', 'sum']
+LOSS_REG_SQUARED: False # Whether to use the squared regression loss.
+LOSS_VELOCITY: False
+
+weight_decay: null
+
 # -------------------- Logger config -----------------------------
 notes                        : 'Flow Matching'
 
-
 # ---------------------------- Configurations for model ----------------------------
 MODEL:
-    Name: "CogFlow"
+    NAME: "cogflow"
     AGENT_DIM: 2
     NUM_PROPOSED_QUERY: 20
     MODEL_OUT_DIM: 60
@@ -69,8 +107,8 @@ denoising_head_preds         : 20
 k_preds                      : 20
 
 # ------------------------------- Optimizer Parameters ---------------------------------
-train_batch_size             : 64
-test_batch_size              : 1000
+train_batch_size             : 48
+test_batch_size              : 48
 
 OPTIMIZATION:
     NUM_EPOCHS: 10

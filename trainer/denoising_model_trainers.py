@@ -409,11 +409,8 @@ class Trainer(object):
         self.logger.info(f'testing start with the {mode} ckpt')
 
         set_random_seed(42)
-        print("final path = {}".format(os.path.join(self.cfg.model_dir, 'checkpoint_last.pt')))
-        if mode == 'last':
-            ckpt_states = torch.load(os.path.join(self.cfg.model_dir, 'checkpoint_last.pt'), map_location=self.device, weights_only=True)
-        else:
-            ckpt_states = torch.load(os.path.join(self.cfg.model_dir, 'checkpoint_best.pt'), map_location=self.device, weights_only=True)
+        print("final path = {}".format(self.cfg.ckpt_path))
+        ckpt_states = torch.load(self.cfg.ckpt_path, map_location=self.device, weights_only=True)
 
         self.denoiser = self.accelerator.unwrap_model(self.denoiser)
         self.denoiser.load_state_dict(ckpt_states['model'])
@@ -788,6 +785,18 @@ class Trainer(object):
 
         return fut_traj_gt, performance, num_trajs
 
+from trainer.trainer_registry import register_trainer
+
+@register_trainer("cogflow")
+def build_cogflow_fm_trainer(cfg, model, train_loader, val_loader, tb_log, logger):
+    return Trainer(
+        cfg, model, 
+        train_loader, val_loader,  # 其实是val loader
+        tb_log=tb_log, logger=logger,
+        gradient_accumulate_every=1, ema_decay = 0.995, ema_update_every = 1,
+    ) 
+         
+    
     @torch.no_grad()
     def estimate_temporal_tolerance(
             self,
@@ -1195,3 +1204,4 @@ class Trainer(object):
         }
         self.logger.info(f"[ClassTol] Done. total_events = {total_events}")
         return results
+

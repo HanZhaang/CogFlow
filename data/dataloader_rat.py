@@ -512,3 +512,58 @@ def _safe_div(a, b, eps=1e-6):
 def _wrap_pi(a):
     # wrap angle to [-pi, pi]
     return (a + torch.pi) % (2 * torch.pi) - torch.pi
+
+import copy
+from data.dataset_registry import register_dataset
+from torch.utils.data import DataLoader
+
+@register_dataset("rat_dataset")
+def build_rat_dataloader(cfg, args):
+    """
+    Rat dataset dataloader builder (MinMax normalized).
+    """
+
+    train_dset = RatDatasetMinMax(
+        data_dir=cfg.data_dir,
+        obs_len=cfg.past_frames,
+        pred_len=cfg.future_frames,
+        training=True,
+        num_scenes=cfg.n_train,
+        overfit=cfg.overfit,
+        cfg=cfg,
+        data_norm=cfg.data_norm
+    )
+
+    train_loader = DataLoader(
+        train_dset,
+        batch_size=cfg.train_batch_size,
+        shuffle=True,
+        num_workers=cfg.num_workers,
+        collate_fn=seq_collate_rat,
+        pin_memory=True
+    )
+
+    if cfg.overfit:
+        test_dset = copy.deepcopy(train_dset)
+    else:
+        test_dset = RatDatasetMinMax(
+            data_dir=cfg.data_dir,
+            obs_len=cfg.past_frames,
+            pred_len=cfg.future_frames,
+            training=False,
+            test_scenes=cfg.n_test,
+            overfit=cfg.overfit,
+            cfg=cfg,
+            data_norm=cfg.data_norm
+        )
+
+    test_loader = DataLoader(
+        test_dset,
+        batch_size=cfg.test_batch_size,
+        shuffle=False,
+        num_workers=cfg.num_workers,
+        collate_fn=seq_collate_rat,
+        pin_memory=True
+    )
+
+    return train_loader, test_loader
