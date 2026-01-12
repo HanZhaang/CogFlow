@@ -108,7 +108,8 @@ class ConditionEncoder(nn.Module):
         # 允许任意分支缺省
         outs = []
         # outs += [self.br_hist(inputs['hist_feats'])]
-        outs += [self._enc_one(self.br_cue , inputs['cond_cue'])]
+        cond_cue = torch.cat([inputs['hist_cond_cue'], inputs['fut_cond_cue']], dim=1)
+        outs += [self._enc_one(self.br_cue , cond_cue)]
         # outs += [self._enc_one(self.br_goal, inputs.get('goal_rel'))]
         # outs += [self._enc_one(self.br_zd  , inputs.get('z_d'))]
         # outs += [self._enc_one(self.br_zc  , inputs.get('z_c'))]

@@ -7,15 +7,15 @@ dataset                      : rat
 dataset_name: rat_dataset
 num_workers : 4
 past_frames                  : 30
-future_frames                : 30
+future_frames                : 60
 agents                       : 8
 dt                           : 0.033
 checkpt_freq                 : 10
 data_dir: './data/rat'
 
 overfit: False
-n_train: 4144
-n_test: 1181
+n_train: 414
+n_test: 118
 rotate: False
 data_norm: 'min_max'
 
@@ -60,6 +60,10 @@ LOSS_NN_MODE: 'agent' # choices=['agent', 'scene', 'both']
 LOSS_REG_REDUCTION: 'sum' # ['mean', 'sum']
 LOSS_REG_SQUARED: False # Whether to use the squared regression loss.
 LOSS_VELOCITY: False
+LOSS_CTRL: False
+LOSS_STAB: False
+CTRL_U_KEY: 'fut_cond_cue'
+CNSDE       : "m2" # mn, n >= 2
 
 weight_decay: null
 
@@ -71,7 +75,7 @@ MODEL:
     NAME: "cogflow"
     AGENT_DIM: 2
     NUM_PROPOSED_QUERY: 20
-    MODEL_OUT_DIM: 60
+    MODEL_OUT_DIM: 120
     REGRESSION_MLPS: [128, 256, 64, 2]
     CLASSIFICATION_MLPS: [128, 128, 1]
 
@@ -107,11 +111,11 @@ denoising_head_preds         : 20
 k_preds                      : 20
 
 # ------------------------------- Optimizer Parameters ---------------------------------
-train_batch_size             : 48
-test_batch_size              : 48
+train_batch_size             : 32
+test_batch_size              : 32
 
 OPTIMIZATION:
-    NUM_EPOCHS: 10
+    NUM_EPOCHS: 30
 
     OPTIMIZER: AdamW
     LR: 0.001
@@ -127,4 +131,6 @@ OPTIMIZATION:
       'reg': 1.0, 
       'vel': 0.2,
       'omega': 0,
+      'ctrl': 0,
+      'stab': 0
     }

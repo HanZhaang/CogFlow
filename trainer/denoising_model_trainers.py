@@ -281,7 +281,7 @@ class Trainer(object):
                         # loss_reg：回归项（如与 GT 轨迹的 L2/L1 或 IMLE/Chamfer 的“最近邻”回归）
                         # loss_cls：分类/互斥项（K-shot 多模态分支的“哪一条更接近 GT”的分类或分散正则）
                         # loss_vel：速度/平滑正则（鼓励速度场/轨迹的时间一致性）
-                        loss, loss_reg, loss_cls, loss_vel = self.denoiser(data, log_dict)
+                        loss, loss_reg, loss_cls, loss_vel, loss_ctrl, loss_stab = self.denoiser(data, log_dict)
                         # 由于用 梯度累积，把 loss 除以 gradient_accumulate_every，保证累计后等价于一个大 batch
                         loss = loss / self.gradient_accumulate_every
                         # total_loss 用于进度条显示（统计这次累积窗口的损失之和）
@@ -295,9 +295,12 @@ class Trainer(object):
                         self.tb_log.add_scalar('train/loss_reg', loss_reg.item(), self.step)
                         self.tb_log.add_scalar('train/loss_cls', loss_cls.item(), self.step)
                         self.tb_log.add_scalar('train/loss_vel', loss_vel.item(), self.step)
+                        self.tb_log.add_scalar('train/loss_ctrl', loss_ctrl.item(), self.step)
+                        self.tb_log.add_scalar('train/loss_stab', loss_stab.item(), self.step)
+                        # self.tb_log.add_scalar('train/loss_stab', loss_stab.item(), self.step)
                         self.tb_log.add_scalar('train/learning_rate', self.opt.param_groups[0]["lr"], self.step)
                 # 以 self.step 作为横坐标（全局 step）
-                pbar.set_description(f'total loss: {total_loss:.4f}, loss_reg: {loss_reg:.4f}, loss_cls: {loss_cls:.4f}, loss_vel: {loss_vel:.4f}, lr: {self.opt.param_groups[0]["lr"]:.6f}')
+                pbar.set_description(f'total loss: {total_loss:.4f}, loss_reg: {loss_reg:.4f}, loss_cls: {loss_cls:.4f}, loss_vel: {loss_vel:.4f}, loss_ctrl: {loss_ctrl.item():.4f}, loss_stab: {loss_stab.item():.4f}, lr: {self.opt.param_groups[0]["lr"]:.6f}')
                 # 更新进度条的文本：显示这次梯度累积窗口的损失统计与当前 LR。
                 accelerator.wait_for_everyone()
                 accelerator.clip_grad_norm_(self.denoiser.parameters(), self.cfg.OPTIMIZATION.GRAD_NORM_CLIP)
@@ -487,6 +490,7 @@ class Trainer(object):
         pred_traj = rearrange(pred_traj, 'b k a (f d) -> (b a) k f d', f=self.cfg.future_frames)[...,0:3]  # [B, k_preds, 11, 40] -> [B * 11, k_preds, 20, 2]
         # print("???? pred_traj shape = {}".format(pred_traj.shape))
         pred_traj_at_t = rearrange(pred_traj_at_t, 'b t k a (f d) -> (b a) t k f d', f=self.cfg.future_frames)[...,0:3]  # [B, k_preds, 11, 40] -> [B * 11, k_preds, 20, 2]
+        # print("???? pred_traj_at_t shape = {}".format(pred_traj_at_t.shape))
 
         if self.cfg.get('data_norm', None) == 'min_max':
             # pred_traj = unnormalize_min_max(pred_traj, self.cfg.fut_traj_min, self.cfg.fut_traj_max, -1, 1)
@@ -494,7 +498,7 @@ class Trainer(object):
             # print("????? pred_traj = {} {}".format(self.cfg.stats["fut_mean"], self.cfg.stats["fut_std"]))
             pred_traj = unnormalize_mean_std(pred_traj, self.cfg.stats["fut_mean"], self.cfg.stats["fut_std"],
                                                      1)  # [B, K, A, T, D] 没还原
-            # print("?????? pred_traj shape = {}".format(pred_traj))
+            # print("?????? pred_traj shape = {}".format(pred_traj.shape))
             pred_traj_at_t = unnormalize_mean_std(pred_traj_at_t, self.cfg.stats["fut_mean"],
                                                    self.cfg.stats["fut_std"], 1)  # [B, K, A, T, D] 没还原
 
@@ -621,7 +625,7 @@ class Trainer(object):
             data = {k : v.to(self.device) for k, v in data.items()}
 
             pred_traj, pred_traj_t, t_seq, y_t_seq, pred_score = self.sample_from_denoising_model(data)
-
+            # print("pred_traj_t shape = {}".format(pred_traj_t.shape))
             pred_trajs.append(pred_traj)
             hits_trajs.append(data["past_traj_original_scale"])
             hist_cond_cue.append(data["hist_cond_cue"])
@@ -646,7 +650,7 @@ class Trainer(object):
                 freq = 3
                 factor_time = 1.2
             elif self.cfg.dataset in ["rat", "babel"]:
-                freq = 5
+                freq = 10
                 factor_time = 0.3
 
             for time in range(1, 7):
@@ -742,7 +746,7 @@ class Trainer(object):
         if save_trajs:
             pred_trajs_np = []
             for item in pred_trajs:
-                item = rearrange(item, '(b a) k f d -> b k a f d', a=8)  # [B, K, A, F, D]
+                item = rearrange(item, '(b a) k f d -> b k a f d', a=self.cfg.agents)  # [B, K, A, F, D]
                 item = item.cpu()
                 item = unnormalize_mean_std(item, self.cfg.stats["fut_mean"], self.cfg.stats["fut_std"],0)  # [B, K, A, T, D]
                 item = item.detach().numpy()
@@ -774,7 +778,7 @@ class Trainer(object):
             # fut_trajs = [item.cpu().detach().numpy() for item in fut_gt_trajs]
             fut_trajs_np = []
             for item in fut_trajs:
-                # item = rearrange(item, '(b a) f d -> b a f d', a=8)  # [B, K, A, F, D]
+                # item = rearrange(item, '(b a) f d -> b a f d', a=self.cfg.agents)  # [B, K, A, F, D]
                 item = item.cpu()
                 item = unnormalize_mean_std(item, self.cfg.stats["fut_mean"], self.cfg.stats["fut_std"],0)  # [B, K, A, T, D]
                 item = item.detach().numpy()
@@ -792,6 +796,7 @@ class Trainer(object):
             )
 
         return fut_traj_gt, performance, num_trajs
+    
 
 from trainer.trainer_registry import register_trainer
 

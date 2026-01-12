@@ -368,4 +368,3 @@ if __name__ == "__main__":
 	main()
 
 # python fm_rat.py --exp rat_1225_test --tied_noise --fm_in_scaling --checkpt_freq 5 --batch_size 48 --init_lr 1e-3
-

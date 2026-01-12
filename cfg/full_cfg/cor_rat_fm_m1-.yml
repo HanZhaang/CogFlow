@@ -1,0 +1,134 @@
+# ------------------- General Options -------------------------
+description                  : Correlated FlowMatching
+results_root_dir             : results_rat
+dataset                      : rat
+
+# ------------------- Dataset -------------------------
+dataset_name: rat_dataset
+num_workers : 4
+past_frames                  : 30
+future_frames                : 60
+agents                       : 8
+dt                           : 0.033
+checkpt_freq                 : 10
+data_dir: './data/rat'
+
+overfit: False
+n_train: 4144
+n_test: 1184
+rotate: False
+data_norm: 'min_max'
+
+# ---------------- checkpoint save ----------------
+checkpt_freq: 5
+max_num_ckpts: 5
+load_pretrained: False
+ckpt_path: null 
+
+# ---------------- pub hyper para ----------------
+
+fix_random_seed: True
+seed: 42
+init_lr: 0.001
+
+# ------------------- per hyper para -------------------------
+
+denoising_method             : 'fm'
+sampling_steps               : 10
+t_schedule                   : 'logit_normal'
+objective                    : 'pred_data'
+sigma_data                   : 0.13
+
+sampling_steps: 10
+t_schedule: "logit_normal" # choices=['uniform', 'logit_normal']
+fm_skewed_t: null 
+logit_norm_mean: -0.5
+logit_norm_std: 1.5
+
+fm_wrapper: 'direct' # choices=['direct', 'velocity', 'precond']
+fm_rew_sqrt: False 
+fm_in_scaling: True
+
+drop_method: "emb"
+drop_logi_k: 20.0 # Logistic growth rate for masking rate at different timesteps.
+drop_logi_m: 0.5  # Logistic midpoint for masking rate at different timesteps.
+
+use_pre_norm: False # Where to normalize the input trajectories in the Transformer Encoders.
+tied_noise: True
+
+LOSS_NN_MODE: 'agent' # choices=['agent', 'scene', 'both']
+LOSS_REG_REDUCTION: 'sum' # ['mean', 'sum']
+LOSS_REG_SQUARED: False # Whether to use the squared regression loss.
+LOSS_VELOCITY: False
+LOSS_CTRL: False
+LOSS_STAB: False
+CTRL_U_KEY: 'fut_cond_cue'
+CNSDE       : "m0" # mn n <=1
+
+weight_decay: null
+
+# -------------------- Logger config -----------------------------
+notes                        : 'Flow Matching'
+
+# ---------------------------- Configurations for model ----------------------------
+MODEL:
+    NAME: "cogflow"
+    AGENT_DIM: 2
+    NUM_PROPOSED_QUERY: 20
+    MODEL_OUT_DIM: 120
+    REGRESSION_MLPS: [128, 256, 120]
+    CLASSIFICATION_MLPS: [128, 128, 1]
+
+    USE_PE_QUERY: True
+    USE_PE_AGENT: True
+
+    COND_D_CUE: 7
+    COND_D_HIST: 7
+    COG_D_Z: 64
+    CONTEXT_ENCODER:
+        NAME: MTREncoder
+        DATA_TYPE: rat
+        NUM_OF_ATTN_NEIGHBORS: 8
+        NUM_INPUT_CONTEXT: 6
+
+        NUM_CHANNEL_IN_MLP_AGENT: 256
+        NUM_LAYER_IN_MLP_AGENT: 3
+
+        D_MODEL: 128
+        NUM_ATTN_LAYERS: 4
+        NUM_ATTN_HEAD: 8
+        DROPOUT_OF_ATTN: 0.1
+
+    MOTION_DECODER:
+        NAME: MTRDecoder
+        D_MODEL: 128
+        NUM_DECODER_BLOCKS: 4
+        NUM_ATTN_HEAD: 8
+        DROPOUT_OF_ATTN: 0.1
+
+
+denoising_head_preds         : 20
+k_preds                      : 20
+
+# ------------------------------- Optimizer Parameters ---------------------------------
+train_batch_size             : 32
+test_batch_size              : 32
+
+OPTIMIZATION:
+    NUM_EPOCHS: 600
+
+    OPTIMIZER: AdamW
+    LR: 0.001
+    WEIGHT_DECAY: 0.05
+
+    SCHEDULER: cosineAnnealingLRwithWarmup
+    LR_CLIP: 0.000001
+
+    GRAD_NORM_CLIP: 1.0
+
+    LOSS_WEIGHTS: {
+      'cls': 0,
+      'reg': 1.0, 
+      'vel': 0.2,
+      'omega': 0,
+    }

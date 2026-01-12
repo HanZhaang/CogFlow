@@ -226,3 +226,6 @@ cfg/rat/tb_eval/
 cfg/full_cfg/log/
 cfg/full_cfg/npz/
 cfg/full_cfg/tb_eval/
+
+data/babel_3060/
+data/rat/rat_ver2_smooth_3060/

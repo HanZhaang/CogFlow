@@ -136,5 +136,6 @@ def evaluate_predictions(
 
 if __name__ == '__main__':
     bundle = load_pred_fut("/root/CogFlow/cfg/full_cfg/npz/rat_cogflow.npz")
-    perf = evaluate_predictions(bundle["pred"], bundle["fut"], horizons=[10, 20, 30])
+    perf = evaluate_predictions(bundle["pred"], bundle["fut"], horizons=[10, 20, 30, 40, 50, 60])
     print(perf["ADE_min"], perf["FDE_min"], perf["Diversity"])
+    
