@@ -81,6 +81,24 @@ class FlowMatcher(nn.Module):
         self.loss_buffer = LossBuffer(t_min=0, t_max=1.0, num_time_steps=100)
         # register_buffer = lambda name, val: self.register_buffer(name, val.to(torch.float32))
 
+        if self.cfg.LOSS_CTRL == True:
+            # loss crl
+            self.ctrl_eps = 1e-6
+            self.ctrl_delta = float(self.cfg.get('CTRL_DELTA', 0.05))  # 扰动强度（可配）
+            self.ctrl_u_key = str(self.cfg.get('CTRL_U_KEY', 'fut_cmd'))  # x_data里控制的key
+            self.ctrl_apply_to = str(self.cfg.get('CTRL_APPLY_TO', 'future'))  # 'future'/'all'
+            self.ctrl_mode = str(self.cfg.get('CTRL_MODE', 'cont_gaussian'))  # 'cont_gaussian'/'flip_onehot'
+            self.ctrl_weight = float(self.cfg.OPTIMIZATION.LOSS_WEIGHTS.get('ctrl', 0.1))
+
+            # 你需要知道 latent Z 的维度 z_dim（从模型里拿最稳）
+            z_dim = int(getattr(self.model, 'z_dim', self.cfg.get('Z_DIM', 64)))
+            W = _make_orthonormal_W(z_dim, out_dim=2, device=self.device)
+            self.register_buffer('W_z2xy', W)  # [Zdim, 2]
+        if self.cfg.LOSS_STAB == True:
+            from models.utils.sigma_theta_loss import SigmaThetaCond
+            self.sigma_theta = SigmaThetaCond(z_dim=self.cfg.MODEL.COG_D_Z, u_dim=self.cfg.MODEL.COND_D_CUE,
+                                            hidden_dim=self.cfg.MODEL.CONTEXT_ENCODER.D_MODEL, use_time=False)
+        
 
     @property
     def device(self):
@@ -225,7 +243,11 @@ class FlowMatcher(nn.Module):
         #     y_t_in = y_t
 
         # model_out, pred_score = self.model(y_t_in, t, x_data = x)
-        model_out = self.model(y_t_in, t, x_data = x)
+        if self.cfg.LOSS_CTRL or self.cfg.LOSS_STAB:
+            model_out, (z_seq, u_seq) = self.model(y_t_in, t, x_data = x)
+        else:
+            model_out = self.model(y_t_in, t, x_data = x)
+        
         pred_score = torch.tensor(0, device=self.device)
         y_data_at_t = self.fm_wrapper_func(y_t, t, model_out)            # [B, K, A, F * D]
 
@@ -352,6 +374,77 @@ class FlowMatcher(nn.Module):
 
         return y_t, y_data_at_t_ls, t_ls, y_t_ls, model_preds.pred_score
 
+    def _find_u_tensor(self, x_data: dict):
+        """
+        尽量鲁棒地找控制张量 u。
+        你可以在 cfg 里指定 CTRL_U_KEY；找不到则尝试常见 key。
+        """
+        cand_keys = [self.ctrl_u_key]
+
+        for k in cand_keys:
+            if k in x_data and torch.is_tensor(x_data[k]):
+                return k, x_data[k]
+        return None, None
+
+    @torch.no_grad()
+    def _perturb_u(self, u: torch.Tensor, delta: float, mode: str):
+        """
+        u: (..., C) 通常 C=7，前4维one-hot，后面是连续特征
+        返回 u_plus（同shape）
+        """
+        u_plus = u.clone()
+
+        C = u_plus.shape[-1]
+        if C < 5:
+            # 如果没有连续维度，就只能做one-hot扰动
+            mode = 'flip_onehot'
+
+        if mode == 'cont_gaussian':
+            # 只扰动连续部分（默认后 C-4 维），one-hot不动
+            cont = u_plus[..., 4:]
+            noise = torch.randn_like(cont) * delta
+            u_plus[..., 4:] = cont + noise
+            return u_plus
+
+        if mode == 'flip_onehot':
+            # 将 one-hot 做确定性/随机翻转；默认确定性“循环到下一类”
+            onehot = u_plus[..., :4]
+            idx = onehot.argmax(dim=-1)  # (...)
+            idx2 = (idx + 1) % 4
+            onehot2 = F.one_hot(idx2, num_classes=4).to(onehot.dtype)
+            u_plus[..., :4] = onehot2
+            return u_plus
+
+        raise ValueError(f"Unknown CTRL_MODE: {mode}")
+
+    def _make_x_data_plus(self, x_data: dict, delta: float):
+        """
+        复制 x_data 并仅扰动控制信号 u。
+        """
+        x_plus = {}
+        for k, v in x_data.items():
+            # 浅拷贝 tensor（clone留给u），非tensor直接引用也通常没问题
+            x_plus[k] = v
+
+        u_key, u = self._find_u_tensor(x_data)
+        if u_key is None:
+            raise KeyError("Cannot find control tensor in x_data. Set cfg.CTRL_U_KEY properly.")
+
+        u_plus = self._perturb_u(u, delta=delta, mode=self.ctrl_mode)
+
+        # 可选：只扰动未来段（例如 u shape [B,A,Th+Tf,C]）
+        if self.ctrl_apply_to == 'future' and u_plus.dim() >= 4:
+            # 约定最后两维是 [T, C] 或 [..., T, C]
+            T = u_plus.shape[-2]
+            Tf = int(self.cfg.future_frames)
+            if T >= Tf:
+                u_plus2 = u.clone()
+                u_plus2[..., -Tf:, :] = u_plus[..., -Tf:, :]
+                u_plus = u_plus2
+
+        x_plus[u_key] = u_plus
+        return x_plus
+    
     def p_losses(self, x_data, log_dict=None):
         """
         Denoising model training.
@@ -398,14 +491,20 @@ class FlowMatcher(nn.Module):
         # self.model: 输入（噪声/中间态 y_t_in, 时间 t, 上下文 x_data），输出：
         #   - model_out: [B, K, A, T*D]  速度/残差/去噪方向（取决于 fm_wrapper_func 的定义）
         #   - denoiser_cls: [B, K, A]    每个候选分支的logits，用于选择/分类损失（可选）
-        model_out = self.model(y_t_in, t, x_data=x_data)  # [B, K, A, T * D] + [B, K, A]
+        if self.cfg.LOSS_CTRL or self.cfg.LOSS_STAB:
+            model_out, (z_seq, u_seq) = self.model(y_t_in, t, x_data=x_data)  # [B, K, A, T * D] + [B, K, A]
+        else:
+            model_out = self.model(y_t_in, t, x_data=x_data)  # [B, K, A, T * D] + [B, K, A]
+
         # 把网络输出包一层“FM包装器”：根据FM定义把 model_out 映射到“去噪后的 y”（如 ŷ_0 或 ŷ_{t-Δ}）
         # 常见：Rectified Flow时 denoised_y = y_t + Δt * v_theta(x_t,t)；或 Wrapper 把速度场转换为数据空间
         denoised_y = self.fm_wrapper_func(y_t, t, model_out) # [B, K, A, T*D]
 
         # ---------- 还原形状，进入度量空间（反归一化） ----------
         # 把最后一维 T*D 还原成 [T, D]
+        # print("denoised_y shape = {}".format(denoised_y.shape))
         denoised_y = rearrange(denoised_y, 'b k a (f d) -> b k a f d', f=self.cfg.future_frames)
+        # print("denoised_y shape = {}".format(denoised_y.shape))
         # 同样处理GT（注意 fut_traj_normalized 此刻是 [B,K,A,T*D]，还原成 [B,K,A,T,2]）
         fut_traj_normalized = fut_traj_normalized.view(B, K, A, T, -1)
         # 根据 data_norm 反归一化到“评估/物理单位”（像素或厘米）
@@ -422,6 +521,54 @@ class FlowMatcher(nn.Module):
             fut_traj_metric = fut_traj_normalized
         else:
             raise ValueError(f"Unknown data normalization method: {self.cfg.get('data_norm', None)}")
+
+        ctrl_err_scene = None  # [B, K]
+        if self.cfg.get('LOSS_CTRL', False):
+            # 1) 构造扰动后的条件 x_data_plus（只扰动控制）
+            x_data_plus = self._make_x_data_plus(x_data, delta=self.ctrl_delta)
+
+            # 2) 用同一 y_t_in、t 做第二次 forward 得到 denoised_y_plus（保持噪声路径一致）
+            model_out_plus, (z_seq_plus, u_seq_plus) = self.model(y_t_in, t, x_data=x_data_plus)
+            denoised_y_plus = self.fm_wrapper_func(y_t, t, model_out_plus)  # [B,K,A,T*D]
+            denoised_y_plus = rearrange(denoised_y_plus, 'b k a (f d) -> b k a f d', f=self.cfg.future_frames)
+
+            # 3) 取 controlled SDE rollout：Z 与 Z_plus
+            #    要求你提供接口：self.model.get_z_rollout(x_data, T)
+            #    推荐返回 shape: [B, A, T, Zdim]
+            Z, u = self.model.get_z_rollout(x_data)         # [B,A,T,Z]
+            Z = repeat(Z, 'b t z -> b a t z', a=denoised_y_plus.shape[2])
+            # print("Z shape = {}".format(Z.shape))
+            	
+            Zp, u = self.model.get_z_rollout(x_data_plus)   # [B,A,T,Z]
+            Zp = repeat(Zp, 'b t z -> b a t z', a=denoised_y_plus.shape[2])
+            # print("Zp shape = {}".format(Zp.shape))
+            
+            # 4) 有限差分：Δx, Δz
+            #    Δx: [B,K,A,T,2]（若D>2取前2维）
+            dx = denoised_y_plus[..., :2] - denoised_y[..., :2]
+
+            #    Δz: [B,A,T,Z] -> broadcast to K: [B,1,A,T,Z] -> [B,K,A,T,Z]
+            dz = (Zp - Z)  # [B,A,T,Z]
+            dz = dz[:, None, ...]  # [B,1,A,T,Z]
+            # print("dz shape = {}".format(dz.shape))
+            # print("W_z2xy shape = {}".format(self.W_z2xy.shape))
+
+            # 5) 投影 Δz 到 2D：dz2 = dz @ W  => [B,K,A,T,2]
+            dz2 = torch.matmul(dz, self.W_z2xy)  # broadcasting matmul
+
+            # 6) cosine loss per frame
+            #    cos = <dx, dz2> / (||dx|| ||dz2||)
+            dx_norm = dx.norm(dim=-1)  # [B,K,A,T]
+            dz_norm = dz2.norm(dim=-1) # [B,K,A,T]
+            denom = (dx_norm * dz_norm).clamp_min(self.ctrl_eps)
+            cos = (dx * dz2).sum(dim=-1) / denom  # [B,K,A,T]
+
+            # 可选：对近似为0的响应做 mask，避免无意义梯度
+            mask = ((dx_norm > 1e-4) & (dz_norm > 1e-4)).to(cos.dtype)  # [B,K,A,T]
+            ctrl_err = (1.0 - cos) * mask  # [B,K,A,T]
+
+            # 7) 聚合：sum over T（保持“累积效应”）
+            ctrl_err_agent = ctrl_err.sum(dim=-1)  # [B,K,A]
 
         # ---------- 速度正则（未实现分支，占位） ----------
         if self.cfg.get('LOSS_VELOCITY', False):
@@ -465,15 +612,32 @@ class FlowMatcher(nn.Module):
 
             # 分类头：预测哪个K是最佳（对A平均后为 [B,K]）
             # cls_logits = denoiser_cls.mean(dim=-1)  # [B, K]
-            loss_cls_b = F.cross_entropy(input=cls_logits, target=selected_components, reduction='none')	# [B]
+            # loss_cls_b = F.cross_entropy(input=cls_logits, target=selected_components, reduction='none')	# [B]
         elif self.cfg.LOSS_NN_MODE == 'agent':
             # agent-level selection
             # 2) 在agent级上选择：每个agent各自找最优k* ⇒ [B,A]
+            # print("denoising_error_per_agent shape = {}".format(denoising_error_per_agent.shape))
             selected_components = denoising_error_per_agent.argmin(dim=1)  # [B, A]
+            # print("selected_components shape = {}".format(selected_components.shape))
             # 按k*提取每个agent的误差 ⇒ [B,A]
             loss_reg_b = denoising_error_per_agent.gather(1, selected_components[:, None, :]).squeeze(1)  	# [B, A]
             # 再对A平均成 [B]
             loss_reg_b = loss_reg_b.mean(dim=-1)  # [B]
+            
+            loss_ctrl = torch.zeros(1, device=self.device)
+            if self.cfg.get('LOSS_CTRL', False):
+                # ctrl_err_scene: [B,K] -> gather best branch -> [B]
+                # print("ctrl_err_scene shape = {}".format(ctrl_err_agent.shape))
+                selected_components_ctrl = ctrl_err_agent.argmin(dim=1)
+                # print("selected_components_ctrl shape = {}".format(selected_components_ctrl.shape))
+                loss_ctrl_b = ctrl_err_agent.gather(1, selected_components_ctrl[:, None, :]).squeeze(1)  # [B]
+                loss_ctrl = loss_ctrl_b.mean()  # scalar
+            
+            loss_stab = torch.zeros(1, device=self.device)
+            if self.cfg.get('LOSS_STAB', False):
+                sigma = self.sigma_theta(Z=z_seq, u=u_seq)  # or self.sigma_theta(Z_rollout, t_seq, u_seq)
+                loss_stab = (sigma.pow(2).sum(dim=-1)).mean()
+            
             # 分类头：把 [B,K,A] 拉平为 [B*A,K]，每个agent各自做分类
             # cls_logits = rearrange(denoiser_cls, 'b k a -> (b a) k')	# [B * A, K]
             # cls_labels = selected_components.view(-1)					# [B * A]
@@ -505,8 +669,16 @@ class FlowMatcher(nn.Module):
         weight_reg = self.cfg.OPTIMIZATION.LOSS_WEIGHTS.get('reg', 1.0)
         weight_cls = self.cfg.OPTIMIZATION.LOSS_WEIGHTS.get('cls', 1.0)
         weight_vel = self.cfg.OPTIMIZATION.LOSS_WEIGHTS.get('vel', 0.2)
+        weight_ctrl = self.cfg.OPTIMIZATION.LOSS_WEIGHTS.get('ctrl', 0)
+        weight_stab = self.cfg.OPTIMIZATION.LOSS_WEIGHTS.get('stab', 0)
+        # print("weight_ctrl = {}".format(weight_ctrl))
         # 最终总损失：回归 + 分类 + 速度正则
-        loss = weight_reg * loss_reg.mean() + weight_cls * loss_cls.mean() + weight_vel * loss_reg_vel.mean()
+        # loss = weight_reg * loss_reg.mean() + weight_ctrl * loss_ctrl + weight_cls * loss_cls.mean() + weight_vel * loss_reg_vel.mean()
+        loss = weight_reg * loss_reg.mean() + \
+               weight_cls * loss_cls.mean() + \
+               weight_vel * loss_reg_vel.mean() + \
+               weight_ctrl * loss_ctrl + \
+               weight_stab + loss_stab
 
         # ---------- 分噪声级别(loss per level) 记录 ----------
         # 记录不同 t（或噪声等级）的损失曲线，便于诊断FM在各时间的学习情况
@@ -517,7 +689,7 @@ class FlowMatcher(nn.Module):
                 'denoiser_loss_per_level': dict_loss_per_level
             })
 
-        return loss, loss_reg.mean(), loss_cls.mean(), loss_reg_vel.mean()
+        return loss, loss_reg.mean(), loss_cls.mean(), loss_reg_vel.mean(), loss_ctrl, loss_stab
 
     def forward(self, x, log_dict=None):
         self.cfg.stats["fut_mean"] = self.cfg.stats["fut_mean"].cuda()
@@ -545,3 +717,10 @@ def build_cogflow(cfg, args, logger):
 		raise NotImplementedError(f'Denoising method [{cfg.denoising_method}] is not implemented yet.')
 
 	return denoiser
+
+def _make_orthonormal_W(z_dim: int, out_dim: int = 2, device='cpu'):
+    # 生成随机矩阵并做 QR，得到正交基；取前 out_dim 列
+    M = torch.randn(z_dim, z_dim, device=device)
+    Q, _ = torch.linalg.qr(M)  # [z_dim, z_dim]
+    W = Q[:, :out_dim].contiguous()  # [z_dim, 2]
+    return W

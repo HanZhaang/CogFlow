@@ -1,29 +1,29 @@
-# ------------------- General Options -------------------------
+    # ------------------- General Options -------------------------
 description                  : Correlated FlowMatching
 results_root_dir             : results_babel
 dataset                      : babel
 
 # ------------------- Dataset -------------------------
-dataset_name: babel_dataset
-num_workers : 4
+dataset_name                 : babel_dataset
 past_frames                  : 30
-future_frames                : 30
+future_frames                : 60
 agents                       : 22
 dt                           : 0.033
 checkpt_freq                 : 10
-data_dir: './data/babel'
+data_dir: './data/babel_3060'
 
 overfit: False
-n_train: 4144
-n_test: 1181
+n_train: 9409
+n_test: 2368
 rotate: False
 data_norm: 'min_max'
+eval_on_train: False
 
 # ---------------- checkpoint save ----------------
 checkpt_freq: 5
 max_num_ckpts: 5
 load_pretrained: False
-ckpt_path: null 
+ckpt_path: '/root/CogFlow/results_babel/cor_babel_fm/None_/models/checkpoint_best.pt'
 
 # ---------------- pub hyper para ----------------
 
@@ -34,13 +34,12 @@ init_lr: 0.001
 # ------------------- per hyper para -------------------------
 
 denoising_method             : 'fm'
-sampling_steps               : 10
+sampling_steps               : 100
 t_schedule                   : 'logit_normal'
 objective                    : 'pred_data'
 sigma_data                   : 0.13
 
-sampling_steps: 10
-t_schedule: "logit_normal" # choices=['uniform', 'logit_normal']
+t_schedule: 'logit_normal' # choices=['uniform', 'logit_normal']
 fm_skewed_t: null 
 logit_norm_mean: -0.5
 logit_norm_std: 1.5
@@ -49,7 +48,7 @@ fm_wrapper: 'direct' # choices=['direct', 'velocity', 'precond']
 fm_rew_sqrt: False 
 fm_in_scaling: True
 
-drop_method: "emb"
+drop_method: 'emb'
 drop_logi_k: 20.0 # Logistic growth rate for masking rate at different timesteps.
 drop_logi_m: 0.5  # Logistic midpoint for masking rate at different timesteps.
 
@@ -60,19 +59,24 @@ LOSS_NN_MODE: 'agent' # choices=['agent', 'scene', 'both']
 LOSS_REG_REDUCTION: 'sum' # ['mean', 'sum']
 LOSS_REG_SQUARED: False # Whether to use the squared regression loss.
 LOSS_VELOCITY: False
+CNSDE       : False
 
 weight_decay: null
+solver: lin_poly
+lin_poly_p: 5
+lin_poly_long_step: 1000
+save_samples: True
 
 # -------------------- Logger config -----------------------------
 notes                        : 'Flow Matching'
 
 # ---------------------------- Configurations for model ----------------------------
 MODEL:
-    NAME: "cogflow"
+    NAME: 'cogflow'
     AGENT_DIM: 3
     NUM_PROPOSED_QUERY: 20
-    MODEL_OUT_DIM: 90
-    REGRESSION_MLPS: [128, 256, 64, 3]
+    MODEL_OUT_DIM: 180
+    REGRESSION_MLPS: [128, 256, 180]
     CLASSIFICATION_MLPS: [128, 128, 1]
 
     USE_PE_QUERY: True

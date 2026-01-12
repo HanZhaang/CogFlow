@@ -21,58 +21,75 @@ class MotionTransformer(nn.Module):
         self.config = config
         self.logger = logger
         use_pre_norm = self.model_cfg.get('USE_PRE_NORM', False)
-
+        self.ablation_mode = self.config.CNSDE
         assert not use_pre_norm, "Pre-norm is not supported in this model"
         self.T_f = self.config.get('future_frames', 0)
         self.dt = self.config.get('dt', 0)
-        self.agent_dim = self.model_cfg.AGENT_DIM
+        self.agent_dim = self.model_cfg.AGENT_DIM # !!
         # （1）上下文编码器：把历史轨迹/邻居信息编码成每个 agent 的上下文向量
         self.context_encoder = build_context_encoder(self.model_cfg.CONTEXT_ENCODER, use_pre_norm, config.device)
 
+        if self.ablation_mode == "m0":
+            in_fuse = (self.dim            # encoder_out
+            +  (self.dim*1)      # time_dim
+            +  self.dim)          # y_emb
+            # +  self.dim)         # cond_vec
+        
         # update 2: 将原有的条件/指令编码器 + 注入层 改为神经动力系统
-        # if code_version == "1.0":
-            # self.z_encoder = ZEncoder(
-            #     d_hist = self.model_cfg.get('COND_D_HIST', 0),
-            #     d_cue = self.model_cfg.get('COND_D_CUE', 0),
-            #     d_model = self.dim,
-            #     d_z = self.model_cfg.get('COG_D_Z', 0)
-            # )
+        if self.ablation_mode == "m1":
+            self.z_encoder = ZEncoder(
+                d_hist = self.model_cfg.get('COND_D_HIST', 0),
+                d_cue = self.model_cfg.get('COND_D_CUE', 0),
+                d_model = self.dim,
+                d_z = self.model_cfg.get('COG_D_Z', 0)
+            )
 
             # 最小侵入：一对 FiLM 调制 + 一个线性投影用于拼接
-            # self.cond_proj       = nn.Linear(self.dim, self.dim)
-            # self.z_proj = nn.Linear(self.model_cfg.get('COG_D_Z', 0), self.dim)
-            # self.z_film = ZFiLM(d_feat=self.dim)
-            # self.z_gamma = nn.Linear(self.dim, self.dim)
-            # self.z_beta = nn.Linear(self.dim, self.dim)
+            self.cond_proj = nn.Linear(self.dim, self.dim)
+            self.z_proj = nn.Linear(self.model_cfg.get('COG_D_Z', 0), self.dim)
+            self.z_film = ZFiLM(d_feat=self.dim)
+            self.z_gamma = nn.Linear(self.dim, self.dim)
+            self.z_beta = nn.Linear(self.dim, self.dim)
 
-            # nn.init.zeros_(self.z_gamma.weight)
-            # nn.init.zeros_(self.z_gamma.bias)
-            # nn.init.zeros_(self.z_beta.weight)
-            # nn.init.zeros_(self.z_beta.bias)
+            nn.init.zeros_(self.z_gamma.weight)
+            nn.init.zeros_(self.z_gamma.bias)
+            nn.init.zeros_(self.z_beta.weight)
+            nn.init.zeros_(self.z_beta.bias)
 
-            # self.cond_film_gamma = nn.Linear(self.dim, self.dim)
-            # self.cond_film_beta  = nn.Linear(self.dim, self.dim)
+            self.cond_film_gamma = nn.Linear(self.dim, self.dim)
+            self.cond_film_beta  = nn.Linear(self.dim, self.dim)
 
-        self.z0_encoder = Z0Encoder(
-            num_keypoints=self.config.agents,
-            kp_dim=self.agent_dim * 3,
-            stim_dim=self.model_cfg.get('COND_D_CUE', 0),
-            hidden_dim=self.dim,
-            z_dim=self.model_cfg.get('COG_D_Z', 0)
-        )
+            in_fuse = (self.dim            # encoder_out
+                    +  (self.dim*1)      # time_dim
+                    +  self.dim          # y_emb
+                    +  self.dim)         # cond_vec
+        
+        if self.ablation_mode == "m2":
+            self.z0_encoder = Z0Encoder(
+                num_keypoints=self.config.agents,
+                kp_dim=self.agent_dim * 3,
+                stim_dim=self.model_cfg.get('COND_D_CUE', 0),
+                hidden_dim=self.dim,
+                z_dim=self.model_cfg.get('COG_D_Z', 0)
+            )
 
-        self.neural_sde = ControlledSSLSDE(
-            z_dim=self.model_cfg.get('COG_D_Z', 0),
-            stim_dim=self.model_cfg.get('COND_D_CUE', 0),
-            num_regimes=3,
-            num_bases=16,
-            hidden_dim=self.dim,
-            init_scale=0.1,
-        )
-        self.z_seq_proj =  nn.Linear(self.model_cfg.get('COG_D_Z', 0), self.dim)
-        self.z_seq_gamma = nn.Linear(self.dim, self.dim)
-        self.z_seq_beta = nn.Linear(self.dim, self.dim)
+            self.neural_sde = ControlledSSLSDE(
+                z_dim=self.model_cfg.get('COG_D_Z', 0),
+                stim_dim=self.model_cfg.get('COND_D_CUE', 0),
+                num_regimes=3,
+                num_bases=16,
+                hidden_dim=self.dim,
+                init_scale=0.1,
+            )
+            self.z_seq_proj =  nn.Linear(self.model_cfg.get('COG_D_Z', 0), self.dim)
+            self.z_seq_gamma = nn.Linear(self.dim, self.dim)
+            self.z_seq_beta = nn.Linear(self.dim, self.dim)
 
+            in_fuse = (self.dim            # encoder_out
+            + (self.dim*1)      # time_dim
+            + self.dim)          # y_emb
+        #    + self.dim)         # cond_vec
+                
         # （2）“位置编码”的三件套：K 维query索引、A维agent索引、以及一个事后融合MLP
         self.motion_query_embedding = nn.Embedding(self.model_cfg.NUM_PROPOSED_QUERY, self.dim)
         self.agent_order_embedding = nn.Embedding(self.model_cfg.CONTEXT_ENCODER.NUM_OF_ATTN_NEIGHBORS, self.dim)
@@ -112,10 +129,7 @@ class MotionTransformer(nn.Module):
         # （6）把三路信息拼接后（context、y_emb、t_emb）先做一个融合，再送 decoder
         dim_decoder = self.model_cfg.MOTION_DECODER.D_MODEL
         # ⚠️ 因为要把 cond 拼到融合前，所以把 in_features + self.dim
-        in_fuse = (self.dim            # encoder_out
-                   + (self.dim*1)      # time_dim
-                   + self.dim)          # y_emb
-                   # + self.dim)         # cond_vec
+
         self.init_emb_fusion_mlp = nn.Sequential(
             nn.Linear(in_fuse, self.dim),
             nn.LayerNorm(self.dim),
@@ -201,6 +215,28 @@ class MotionTransformer(nn.Module):
             pass
         return y_emb
     
+    def get_z_rollout(self, x_data):
+        past_traj = x_data["past_traj"]
+        hist_stim = x_data["hist_cond_cue"]
+        # 2.1) 编码初始隐变量 z0
+        z0 = self.z0_encoder(past_traj, hist_stim)   # [B, z_dim]
+
+        # 2.2) 构造未来控制序列 u_seq 并仿真 SDE 得到 z_seq
+        u_seq = self._build_future_control_seq(
+            x_data=x_data,
+            B=z0.shape[0],
+            device=z0.device,
+            dtype=z0.dtype,
+        )                                          # [B, T_f, stim_dim]
+
+        z_seq = simulate_sde_paths(
+            sde=self.neural_sde,
+            z0=z0,
+            u_seq=u_seq,
+            dt=self.dt,
+        )                                          # [B, T_f, d_dim]
+        return z_seq, u_seq
+        
     def forward(self, y, time, x_data):
         '''
         y: noisy vector
@@ -233,48 +269,27 @@ class MotionTransformer(nn.Module):
         # print("encoder_out_batch shape = {}".format(encoder_out_batch.shape))
 
         # update: 1.5 条件编码
-        # if code_version == "1.0":
-            # cond_flow, z = self.z_encoder(x_data)  # Stage A
-            # cond_flow = self.cond_proj(cond_flow)
-            # cond_bka = repeat(cond_flow, 'b d -> b k a d', k=K, a=A)
-            # z_feat = self.z_proj(z)
-            # z_bka = z_feat[:, None, None, :].expand(B, K, A, -1)      # [B,K,A,d_model]
-
-        past_traj = x_data["past_traj"]
-        hist_stim = x_data["hist_cond_cue"]
-        # 2.1) 编码初始隐变量 z0
-        z0 = self.z0_encoder(past_traj, hist_stim)   # [B, z_dim]
-
-        # 2.2) 构造未来控制序列 u_seq 并仿真 SDE 得到 z_seq
-        u_seq = self._build_future_control_seq(
-            x_data=x_data,
-            B=B,
-            device=device,
-            dtype=z0.dtype,
-        )                                          # [B, T_f, stim_dim]
-
-        z_seq = simulate_sde_paths(
-            sde=self.neural_sde,
-            z0=z0,
-            u_seq=u_seq,
-            dt=self.dt,
-        )                                          # [B, T_f, d_dim]
-        z_frame = self.z_seq_proj(z_seq)
-        z_frame_bka = z_frame[:, None, None, :, :].expand(B, K, A, self.T_f, self.dim)
-
-        gamma = self.z_seq_gamma(z_frame_bka)  # [B,K,A,T_f,D]
-        beta = self.z_seq_beta(z_frame_bka)  # [B,K,A,T_f,D]
-
-        # 到这里位置没有问题，下面如何进行特征融合？
-
-        # （2）把 y（T*D）嵌入到通道维：得到每个 (B,K,A) 的 token
         y_emb = self.noisy_y_mlp(y)  	# [B, K, A, D]
-        # y_emb = y_emb.unsqueeze(3).repeat(1, 1, 1, self.T_f, 1)
 
-        # if code_version == "1.0":
-            # gamma, beta = self.cond_film_gamma(cond_bka), self.cond_film_beta(cond_bka)
-            # y_emb = gamma * y_emb + beta
+        if self.ablation_mode == "m1":
+            cond_flow, z = self.z_encoder(x_data)  # Stage A
+            cond_flow = self.cond_proj(cond_flow)
+            cond_bka = repeat(cond_flow, 'b d -> b k a d', k=K, a=A)
+            z_feat = self.z_proj(z)
+            z_bka = z_feat[:, None, None, :].expand(B, K, A, -1)      # [B,K,A,d_model]
+            gamma, beta = self.cond_film_gamma(cond_bka), self.cond_film_beta(cond_bka)
+            y_emb = gamma * y_emb + beta    # 在此直接融合
 
+        if self.ablation_mode == "m2":
+            z_seq, u_seq = self.get_z_rollout(x_data)
+            z_frame = self.z_seq_proj(z_seq)
+            z_frame_bka = z_frame[:, None, None, :, :].expand(B, K, A, self.T_f, self.dim)
+
+            gamma = self.z_seq_gamma(z_frame_bka)  # [B,K,A,T_f,D]
+            beta = self.z_seq_beta(z_frame_bka)  # [B,K,A,T_f,D]
+            
+        # 到这里位置没有问题，下面如何进行特征融合？
+        
         # （3）时间嵌入：若方法是 fm，则把 t 放大到更大的数值（经验 trick），再过 time_mlp
         time_ = time
         if self.config.denoising_method == 'fm':
@@ -282,16 +297,14 @@ class MotionTransformer(nn.Module):
 
         t_emb = self.time_mlp(time) 	# [B, D]
         t_emb_batch = repeat(t_emb, 'b d -> b k a d', b=B, k=K, a=A) # [B, K, A, D]  # 与 (K,A) 对齐
-        # t_emb_batch = t_emb_batch.unsqueeze(3).repeat(1, 1, 1, self.T_f, 1)
 
         # （4）构造 K、A 的“索引型位置编码”并扩展到 batch
         k_pe = self.motion_query_embedding(torch.arange(self.model_cfg.NUM_PROPOSED_QUERY, device=device))	# [K, D]
         k_pe_batch = repeat(k_pe, 'k d -> b k a d', b=B, a=A)	# [B, K, A, D]
-        # k_pe_batch = k_pe_batch.unsqueeze(3).repeat(1, 1, 1, self.T_f, 1)
 
         a_pe = self.agent_order_embedding(torch.arange(self.model_cfg.CONTEXT_ENCODER.NUM_OF_ATTN_NEIGHBORS, device=device))  # [A, D]
         a_pe_batch = repeat(a_pe, 'a d -> b k a d', b=B, k=K)	# [B, K, A, D]
-        # a_pe_batch = a_pe_batch.unsqueeze(3).repeat(1, 1, 1, self.T_f, 1)
+
 
         # （5）对 y_emb 分别沿 K、沿 A 做自注意，增强 proposal间/agent间的信息交互
         # 先加PE再按 K 维重排为序列：(b a) 为批次，长度 K
@@ -316,33 +329,46 @@ class MotionTransformer(nn.Module):
 
         # （7）与上下文、时间一起融合；再加一次 PE 后交给 motion decoder
         # update
-        # emb_in = torch.cat((encoder_out_batch, y_emb, t_emb_batch, cond_bka), dim=-1)
-        emb_in = torch.cat((encoder_out_batch, y_emb, t_emb_batch), dim=-1)
+        if self.ablation_mode == "m1":
+            emb_in = torch.cat((encoder_out_batch, y_emb, t_emb_batch, cond_bka), dim=-1)
+        else:
+            emb_in = torch.cat((encoder_out_batch, y_emb, t_emb_batch), dim=-1)
         emb_fusion = self.init_emb_fusion_mlp(emb_in)	 	# [B, K, A, D]
+        
         # # 11-24 尝试在此处融合，效果显著，出于对比考虑修改
-        emb_fusion = emb_fusion.unsqueeze(3).repeat(1, 1, 1, self.T_f, 1) # [B, K, A, T, D]
-        emb_fusion = emb_fusion * (1 + gamma) + beta        # [B, K, A, T, D]
-        a_pe_batch = a_pe_batch.unsqueeze(3).repeat(1, 1, 1, self.T_f, 1)
-        k_pe_batch = k_pe_batch.unsqueeze(3).repeat(1, 1, 1, self.T_f, 1)
+        if self.ablation_mode == "m2":
+            emb_fusion = emb_fusion.unsqueeze(3).repeat(1, 1, 1, self.T_f, 1) # [B, K, A, T, D]
+            emb_fusion = emb_fusion * (1 + gamma) + beta        # [B, K, A, T, D]
+            a_pe_batch = a_pe_batch.unsqueeze(3).repeat(1, 1, 1, self.T_f, 1)
+            k_pe_batch = k_pe_batch.unsqueeze(3).repeat(1, 1, 1, self.T_f, 1)
+            t_emb_batch = t_emb_batch.unsqueeze(3).repeat(1, 1, 1, self.T_f, 1)
 
+        
         query_token = self.post_pe_cat_mlp(self.apply_PE(emb_fusion, k_pe_batch, a_pe_batch)) 								# [B, K, A, D]
         # print("query token shape = {}".format(query_token.shape))
+        # if self.ablation_mode == "m2":
         # query_token = rearrange(query_token, 'b k a t d -> b (k a t) d')
         readout_token = self.motion_decoder(query_token, t_emb)													# [B, K, A, D]
         # print("readout token shape = {}".format(readout_token.shape))
 
-        # # 11-25 尝试在后期融合z
+        # # 11-25 尝试在后期融合z (放弃)
         # readout_token = readout_token.unsqueeze(3).repeat(1, 1, 1, self.T_f, 1) # [B, K, A, T, D]
         # readout_token = readout_token * (1.0 + gamma) + beta  # [B,K,A,T_f,D]
 
         # （8）读出：回归分支输出 T*D，分类分支输出 [B,K,A] 的打分
         denoiser_x = self.reg_head(readout_token)  										# [B, K, A, F * D]
-        denoiser_x = rearrange(denoiser_x, 'b k a t d -> b k a (t d)')
+        # print("denoiser_x shape = {}".format(denoiser_x.shape))
+        if self.ablation_mode == "m2":
+            denoiser_x = rearrange(denoiser_x, 'b k a t d -> b k a (t d)')
         # print("denoiser_x shape = {}".format(denoiser_x.shape))
 
         # denoiser_cls = self.cls_head(readout_token).squeeze(-1) 						# [B, K, A]
+        
+        if self.config.LOSS_CTRL or self.config.LOSS_STAB:
+            return denoiser_x, (z_seq, u_seq)
+        else:
+            return denoiser_x
 
-        return denoiser_x
 
 
 class IMLETransformer(nn.Module):

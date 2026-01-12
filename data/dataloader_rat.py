@@ -100,14 +100,14 @@ class RatDatasetMinMax(Dataset):
 
         if not overfit:
             if training:
-                data_root = os.path.join(data_dir, 'rat_ver2_smooth_3030_2/rat_pose_train.npy')
-                cmd_root = os.path.join(data_dir, 'rat_ver2_smooth_3030_2/rat_stim_train.npy')
+                data_root = os.path.join(data_dir, 'rat_ver2_smooth_3060/rat_pose_train.npy')
+                cmd_root = os.path.join(data_dir, 'rat_ver2_smooth_3060/rat_stim_train.npy')
             else:
-                data_root = os.path.join(data_dir, 'rat_ver2_smooth_3030_2/rat_pose_test.npy')
-                cmd_root = os.path.join(data_dir, 'rat_ver2_smooth_3030_2/rat_stim_test.npy')
+                data_root = os.path.join(data_dir, 'rat_ver2_smooth_3060/rat_pose_test.npy')
+                cmd_root = os.path.join(data_dir, 'rat_ver2_smooth_3060/rat_stim_test.npy')
         else:
-            data_root = os.path.join(data_dir, 'rat_ver2_smooth_3030_2/rat_pose_train.npy')
-            cmd_root = os.path.join(data_dir, 'rat_ver2_smooth_3030_2/rat_stim_train.npy')
+            data_root = os.path.join(data_dir, 'rat_ver2_smooth_3060/rat_pose_train.npy')
+            cmd_root = os.path.join(data_dir, 'rat_ver2_smooth_3060/rat_stim_train.npy')
 
         self.trajs_raw = np.load(data_root) #(N,15,11,2)
         self.cmd_raw = np.load(cmd_root)
