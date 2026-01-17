@@ -218,10 +218,10 @@ def data_preprocess(pred_trajs, hits_trajs, cue_trajs):
 
 if __name__ == "__main__":
     # ['rRP', 'lRP', 'rFP', 'lFP', 'tail_root', 'head', 'neck', 'spine']
-    pred_trajs = np.load("./trajs/cond/pred_trajs.npy")
-    hist_trajs = np.load("./trajs/cond/hist_trajs.npy")
-    cue_trajs = np.load("./trajs/cond/hist_cue_trajs.npy")
-    fut_gt_trajs = np.load("./trajs/cond/fut_gt_trajs.npy")
+    pred_trajs = np.load("./trajs/pred_trajs.npy")
+    hist_trajs = np.load("./trajs/hist_trajs.npy")
+    cue_trajs = np.load("./trajs/hist_cue_trajs.npy")
+    fut_gt_trajs = np.load("./trajs/fut_gt_trajs.npy")
 
     print("pred_trajs shape = {}".format(pred_trajs.shape))
     print("hist_trajs shape = {}".format(hist_trajs.shape))
@@ -236,7 +236,7 @@ if __name__ == "__main__":
 
         init = hist_trajs[idx, 7, -1:, 0:2]
         # init = np.expand_dims(init, 0)
-        init = init.repeat(30, 0)
+        init = init.repeat(60, 0)
 
         gt_pos = fut_gt_trajs[idx, 7, :, :] + init
 
@@ -255,4 +255,4 @@ if __name__ == "__main__":
             stim_types=stim_types
         )
 
-        fig.savefig("./result/cond/visual_{}.png".format(idx), dpi=300)
+        fig.savefig("./result/visual_{}.png".format(idx), dpi=300)
