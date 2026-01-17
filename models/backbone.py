@@ -368,8 +368,7 @@ class MotionTransformer(nn.Module):
             return denoiser_x, (z_seq, u_seq)
         else:
             return denoiser_x
-
-
+        
 
 class IMLETransformer(nn.Module):
     def __init__(self, model_config, logger, config):

@@ -97,4 +97,4 @@ if __name__ == "__main__":
 	main()
 
 
-# python eval_rat.py --cfg /root/CogFlow/cfg/full_cfg/cor_rat_eval.yml
+# python eval_rat.py --cfg /root/CogFlow/cfg/full_cfg/cor_rat_eval_m0.yml

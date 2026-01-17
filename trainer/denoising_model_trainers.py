@@ -332,7 +332,6 @@ class Trainer(object):
                         if ckpt_list.__len__() >= self.cfg.max_num_ckpts:
                             for cur_file_idx in range(0, len(ckpt_list) - self.cfg.max_num_ckpts + 1):
                                 os.remove(ckpt_list[cur_file_idx])
-
                         self.save_ckpt('checkpoint_epoch_%d' % cur_epoch)
 
                 self.step += 1
@@ -625,7 +624,7 @@ class Trainer(object):
             data = {k : v.to(self.device) for k, v in data.items()}
 
             pred_traj, pred_traj_t, t_seq, y_t_seq, pred_score = self.sample_from_denoising_model(data)
-            # print("pred_traj_t shape = {}".format(pred_traj_t.shape))
+            print("pred_traj shape = {}".format(pred_traj.shape))
             pred_trajs.append(pred_traj)
             hits_trajs.append(data["past_traj_original_scale"])
             hist_cond_cue.append(data["hist_cond_cue"])
@@ -755,25 +754,25 @@ class Trainer(object):
             # print(pred_trajs_np[0].shape)
             pred_trajs_np = np.concatenate(pred_trajs_np, axis=0)  # 形状变为 (N, T, 2)
             print("pred shape = {}".format(pred_trajs_np.shape))
-            # np.save(r"D:\04_code\MoFlow\visualize\trajs\pred_trajs.npy", pred_trajs_np)
+            np.save("/root/CogFlow/visualize/trajs/pred_trajs.npy", pred_trajs_np)
 
             hits_trajs = [item.cpu().detach().numpy() for item in hits_trajs]
             # print(hits_trajs[0].shape)
             arr = np.concatenate(hits_trajs, axis=0)  # 形状变为 (N, T, 2)
             # print(arr.shape)
-            np.save(r"D:\04_code\MoFlow\visualize\trajs\hist_trajs.npy", arr)
+            np.save("/root/CogFlow/visualize/trajs/hist_trajs.npy", arr)
 
             hist_cond_cue = [item.cpu().detach().numpy() for item in hist_cond_cue]
             # print(cue_trajs[0].shape)
             arr = np.concatenate(hist_cond_cue, axis=0)  # 形状变为 (N, T, 2)
             # print(arr.shape)
-            np.save(r"D:\04_code\MoFlow\visualize\trajs\hist_cue_trajs.npy", arr)
+            np.save("/root/CogFlow/visualize/trajs/hist_cue_trajs.npy", arr)
 
             fut_cond_cue = [item.cpu().detach().numpy() for item in fut_cond_cue]
             # print(cue_trajs[0].shape)
             arr = np.concatenate(fut_cond_cue, axis=0)  # 形状变为 (N, T, 2)
             # print(arr.shape)
-            np.save(r"D:\04_code\MoFlow\visualize\trajs\fut_cue_trajs.npy", arr)
+            np.save("/root/CogFlow/visualize/trajs/fut_cue_trajs.npy", arr)
 
             # fut_trajs = [item.cpu().detach().numpy() for item in fut_gt_trajs]
             fut_trajs_np = []
@@ -786,7 +785,7 @@ class Trainer(object):
 
             fut_trajs_np = np.concatenate(fut_trajs_np, axis=0)  # 形状变为 (N, T, 2)
             print("fut_trajs_np shape = {}".format(fut_trajs_np.shape))
-            # np.save(r"D:\04_code\MoFlow\visualize\trajs\fut_gt_trajs.npy", arr)
+            np.save("/root/CogFlow/visualize/trajs/fut_gt_trajs.npy", fut_trajs_np)
             
             save_pred_fut(
                 save_path = os.path.join(self.cfg.npz_dir, self.cfg.dataset + "_" + self.cfg.MODEL.NAME + ".npz"),

@@ -4,6 +4,8 @@ results_root_dir             : results_rat
 dataset                      : rat
 
 # ------------------- Dataset -------------------------
+dataset_name: rat_dataset
+num_workers : 4
 past_frames                  : 30
 future_frames                : 60
 agents                       : 8
@@ -22,7 +24,7 @@ eval_on_train: False
 checkpt_freq: 5
 max_num_ckpts: 5
 load_pretrained: False
-ckpt_path: '/root/CogFlow/results_rat/cor_rat_fm/None_/models/checkpoint_best.pt'
+ckpt_path: '/root/CogFlow/results_rat/cor_rat_fm_mn/attempt1_drift/models/checkpoint_last.pt'
 
 # ---------------- pub hyper para ----------------
 
@@ -58,7 +60,9 @@ LOSS_NN_MODE: 'agent' # choices=['agent', 'scene', 'both']
 LOSS_REG_REDUCTION: 'sum' # ['mean', 'sum']
 LOSS_REG_SQUARED: False # Whether to use the squared regression loss.
 LOSS_VELOCITY: False
-CNSDE       : 'm1'
+LOSS_CTRL: False
+LOSS_STAB: False
+CNSDE       : 'm2'
 
 weight_decay: null
 solver: lin_poly
@@ -75,7 +79,7 @@ MODEL:
     AGENT_DIM: 2
     NUM_PROPOSED_QUERY: 20
     MODEL_OUT_DIM: 120
-    REGRESSION_MLPS: [128, 256, 120]
+    REGRESSION_MLPS: [128, 256, 64, 2]
     CLASSIFICATION_MLPS: [128, 128, 1]
 
     USE_PE_QUERY: True
@@ -130,4 +134,6 @@ OPTIMIZATION:
       'reg': 1.0, 
       'vel': 0.2,
       'omega': 0,
+      'ctrl': 0,
+      'stab': 0
     }

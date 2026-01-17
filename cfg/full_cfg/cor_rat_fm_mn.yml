@@ -14,8 +14,8 @@ checkpt_freq                 : 10
 data_dir: './data/rat'
 
 overfit: False
-n_train: 414
-n_test: 118
+n_train: 4144
+n_test: 1184
 rotate: False
 data_norm: 'min_max'
 
@@ -115,7 +115,7 @@ train_batch_size             : 32
 test_batch_size              : 32
 
 OPTIMIZATION:
-    NUM_EPOCHS: 30
+    NUM_EPOCHS: 600
 
     OPTIMIZER: AdamW
     LR: 0.001
