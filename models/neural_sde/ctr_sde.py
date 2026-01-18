@@ -262,6 +262,17 @@ class ControlledSSLSDE(nn.Module):
         # 噪声强度 log_sigma: [S, z_dim]，Sigma_i = diag(exp(log_sigma_i))
         self.log_sigma = nn.Parameter(torch.zeros(num_regimes, z_dim))
 
+        self.sigma_mlp = nn.Sequential(
+            nn.Linear(z_dim, hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, z_dim),
+        )
+        self.sigma_scale = nn.Parameter(torch.zeros(num_regimes, z_dim))  # per-regime scaling
+        self.sigma_bias = nn.Parameter(torch.zeros(num_regimes, z_dim))  # per-regime bias
+
+        self.sigma_min = 0.02  # 经验值：提升多样性常用
+        self.sigma_max = 0.5  # 视 dt/稳定性调整
+
         # 状态依赖的 regime 权重 π(z)
         self.partition = RegimePartition(
             z_dim=z_dim,
@@ -270,6 +281,7 @@ class ControlledSSLSDE(nn.Module):
             hidden_dim=hidden_dim,
         )
         self.monitor = DriftMonitor()
+        self.sigma_gain = nn.Parameter(torch.tensor(1.0))
 
         self._init_params(init_scale)
 
@@ -287,6 +299,7 @@ class ControlledSSLSDE(nn.Module):
                 self.B_evt[s].copy_(0.5 * scale * torch.randn_like(self.B_evt[s]))
                 self.a[s].zero_()
                 self.log_sigma[s].fill_(math.log(0.1))
+            nn.init.constant_(self.sigma_scale, 0.1)
 
     # def drift(self, z: torch.Tensor, u: torch.Tensor) -> torch.Tensor:
     #     """
@@ -433,24 +446,48 @@ class ControlledSSLSDE(nn.Module):
         return drift
 
 
+    # def diffusion(self, z: torch.Tensor) -> torch.Tensor:
+    #     """
+    #     扩散项 Σ(z)，这里简化为对角矩阵 diag(sigma_eff(z)):
+    #         sigma_eff(z) = Σ_i π_i(z) * exp(log_sigma_i)
+    #
+    #     z: [B, z_dim]
+    #     return:
+    #         sigma_eff: [B, z_dim]
+    #     """
+    #     # π(z): [B, S]
+    #     pi = self.partition(z)
+    #     # sigma: [S, z_dim]
+    #     sigma = torch.exp(self.log_sigma)
+    #
+    #     # sigma_eff: [B, z_dim] = pi @ sigma
+    #     sigma_eff = torch.einsum("bs,sk->bk", pi, sigma)
+    #
+    #     return sigma_eff
+
     def diffusion(self, z: torch.Tensor) -> torch.Tensor:
-        """
-        扩散项 Σ(z)，这里简化为对角矩阵 diag(sigma_eff(z)):
-            sigma_eff(z) = Σ_i π_i(z) * exp(log_sigma_i)
+        pi = self.partition(z)  # [B,S]
+        base = torch.exp(self.log_sigma)  # [S,z]
 
-        z: [B, z_dim]
-        return:
-            sigma_eff: [B, z_dim]
-        """
-        # π(z): [B, S]
-        pi = self.partition(z)
-        # sigma: [S, z_dim]
-        sigma = torch.exp(self.log_sigma)
+        # state-dependent residual (shared), then per-regime affine
+        h = self.sigma_mlp(z)  # [B,z]
+        # expand to regimes: [B,S,z]
+        h_reg = self.sigma_gain * (h.unsqueeze(1) * self.sigma_scale.unsqueeze(0) + self.sigma_bias.unsqueeze(0))
+        # print(h_reg)
+        # positive residual multiplier
+        # mult = torch.nn.functional.softplus(h_reg) + 1e-4  # [B,S,z], >=0
+        # mult = 1.0 + 0.1 * torch.tanh(h_reg)  # (0.9, 1.1) 左右，可调 0.1
+        log_sigma_reg = self.log_sigma.unsqueeze(0) + h_reg  # [B,S,z]
+        sigma_reg = torch.exp(log_sigma_reg)
+        # print(sigma_reg.norm())
 
-        # sigma_eff: [B, z_dim] = pi @ sigma
-        sigma_eff = torch.einsum("bs,sk->bk", pi, sigma)
+        # sigma_reg = base.unsqueeze(0) * mult  # [B,S,z]
+        sigma_eff = torch.einsum("bs,bsk->bk", pi, sigma_reg)
 
+        # clamp to keep SDE stable + avoid collapse
+        sigma_eff = torch.clamp(sigma_eff, min=self.sigma_min, max=self.sigma_max)
         return sigma_eff
+
 
     def forward(self, z: torch.Tensor, u: torch.Tensor) -> torch.Tensor:
         """
@@ -461,7 +498,6 @@ class ControlledSSLSDE(nn.Module):
         return self.drift(z, u)
 
 
-@torch.no_grad()
 def simulate_sde_paths(
     sde: ControlledSSLSDE,
     z0: torch.Tensor,
@@ -499,7 +535,6 @@ def simulate_sde_paths(
         # drift = sde.drift(z, u_t)      # [B, z_dim]
         drift = sde.drift(z, u_t, dt=dt, u_prev=u_prev, w_level=1.0, w_event=1.0, clip_udot=10.0)
         sigma = sde.diffusion(z)       # [B, z_dim]
-
         noise = torch.randn(B, z_dim, device=device, dtype=dtype)  # dW_t ~ N(0, dt)
         z = z + drift * dt + sigma * sqrt_dt * noise
 
