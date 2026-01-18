@@ -20,7 +20,6 @@ rotate: False
 data_norm: 'min_max'
 
 # ---------------- checkpoint save ----------------
-checkpt_freq: 5
 max_num_ckpts: 5
 load_pretrained: False
 ckpt_path: null 
@@ -39,9 +38,7 @@ t_schedule                   : 'logit_normal'
 objective                    : 'pred_data'
 sigma_data                   : 0.13
 
-sampling_steps: 10
-t_schedule: "logit_normal" # choices=['uniform', 'logit_normal']
-fm_skewed_t: null 
+fm_skewed_t: null
 logit_norm_mean: -0.5
 logit_norm_std: 1.5
 
@@ -111,8 +108,8 @@ denoising_head_preds         : 20
 k_preds                      : 20
 
 # ------------------------------- Optimizer Parameters ---------------------------------
-train_batch_size             : 32
-test_batch_size              : 32
+train_batch_size             : 16
+test_batch_size              : 16
 
 OPTIMIZATION:
     NUM_EPOCHS: 600

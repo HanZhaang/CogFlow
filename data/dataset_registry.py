@@ -16,7 +16,6 @@ def register_dataset(name: str):
     def wrapper(builder_fn):
         if name in _DATASET_REGISTRY:
             raise KeyError(f"Dataset '{name}' already registered.")
-        print("name = {}".format(name))
         _DATASET_REGISTRY[name] = builder_fn
         return builder_fn
     return wrapper

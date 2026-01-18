@@ -99,4 +99,4 @@ if __name__ == "__main__":
 
 # python train.py --cfg /root/CogFlow/cfg/full_cfg/cor_rat_fm.yml
 
-# python train.py --cfg /root/CogFlow/cfg/full_cfg/cor_rat_fm_m1-.yml
+# python train.py --cfg D:\04_code\MoFlow\cfg\full_cfg\cor_rat_fm_mn.yml

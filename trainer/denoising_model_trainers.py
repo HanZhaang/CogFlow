@@ -288,6 +288,8 @@ class Trainer(object):
                         total_loss += loss.item()
                     # 由 Accelerate 统一实现 混精反传（兼容多卡/TPU/零冗余优化器等）
                     self.accelerator.backward(loss)
+                    # print("/// = {}".format(self.denoiser.model.neural_sde.log_sigma.grad.norm()))
+                    # print("/// = {}".format(self.denoiser.model.neural_sde.sigma_mlp[0].weight.grad.norm()))
 
                     # log to tensorboard
                     if self.tb_log is not None:
