@@ -23,7 +23,7 @@ eval_on_train: False
 checkpt_freq: 5
 max_num_ckpts: 5
 load_pretrained: False
-ckpt_path: '/root/CogFlow/results_babel/cor_babel_fm/None_/models/checkpoint_best.pt'
+ckpt_path: '/root/CogFlow/results_babel/cor_babel_fm_m0/Moflow/models/checkpoint_best.pt'
 
 # ---------------- pub hyper para ----------------
 
@@ -59,7 +59,10 @@ LOSS_NN_MODE: 'agent' # choices=['agent', 'scene', 'both']
 LOSS_REG_REDUCTION: 'sum' # ['mean', 'sum']
 LOSS_REG_SQUARED: False # Whether to use the squared regression loss.
 LOSS_VELOCITY: False
-CNSDE       : False
+LOSS_CTRL: False
+LOSS_STAB: False
+CNSDE       : 'm0'
+
 
 weight_decay: null
 solver: lin_poly

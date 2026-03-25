@@ -132,6 +132,7 @@ class CommandEncoder(nn.Module):
         tau: float = 30.0,              # decay timescale in steps (e.g., 30 steps ~ 1s at 30Hz)
         use_time_decay: bool = True,
         use_time_log: bool = True,
+        dataset_type: str = "rat"
     ):
         super().__init__()
         self.emb = nn.Embedding(4, emb_dim)  # {none, fwd, left, right}
@@ -142,16 +143,32 @@ class CommandEncoder(nn.Module):
         self.use_time_decay = use_time_decay
         self.use_time_log = use_time_log
 
-        # feature dims: emb + strength + signed_strength + time_feats
-        time_feat_dim = 0
-        if use_time_decay:
-            time_feat_dim += 1          # exp(-t/tau)
-        if use_time_log:
-            time_feat_dim += 1          # log1p(t)/log1p(time_scale)
+        self.dataset_type = dataset_type
 
-        in_dim = emb_dim + 1 + 1 + time_feat_dim
-        self.proj = nn.Linear(in_dim, out_dim)
-
+        
+        if self.dataset_type == "rat":
+            # feature dims: emb + strength + signed_strength + time_feats
+            time_feat_dim = 0
+            if use_time_decay:
+                time_feat_dim += 1          # exp(-t/tau)
+            if use_time_log:
+                time_feat_dim += 1          # log1p(t)/log1p(time_scale)
+            
+            in_dim = emb_dim + 1 + 1 + time_feat_dim
+            self.proj = nn.Linear(in_dim, out_dim)
+        
+        elif self.dataset_type == "babel":
+            self.word_emb = nn.Embedding(8192, emb_dim)
+            hidden_dim = 128
+            bit_dim = emb_dim // 2  # 你也可以设成 emb_dim
+            self.bit_mlp = nn.Sequential(
+                nn.Linear(13, hidden_dim),
+                nn.SiLU(),
+                nn.Linear(hidden_dim, bit_dim),
+            )
+            
+            self.proj = nn.Linear(emb_dim + bit_dim, out_dim)
+        # ----------------------------- #
         self._init_weights()
 
     def _init_weights(self):
@@ -159,66 +176,106 @@ class CommandEncoder(nn.Module):
         nn.init.normal_(self.emb.weight, mean=0.0, std=0.1)
         nn.init.xavier_uniform_(self.proj.weight, gain=0.5)
         nn.init.zeros_(self.proj.bias)
+        
+        if self.dataset_type == "babel":
+            for m in self.bit_mlp.modules():
+                if isinstance(m, nn.Linear):
+                    nn.init.xavier_uniform_(m.weight)
+                    if m.bias is not None:
+                        nn.init.zeros_(m.bias)
 
     def forward(self, cmd7: torch.Tensor) -> torch.Tensor:
         """
         cmd7: [B, T, 7] or [*, 7]
         returns u: [B, T, out_dim] or [*, out_dim]
         """
-        assert cmd7.size(-1) == 7, f"Expected last dim=7, got {cmd7.size(-1)}"
+        assert cmd7.size(-1) in [7, 13], f"Expected last dim=7, got {cmd7.size(-1)}"
+        if cmd7.size(-1) == 7:
+            onehot = cmd7[..., 0:4]                 # [..., 4]
+            strength = cmd7[..., 4:5]               # [..., 1]
+            signed_strength = cmd7[..., 5:6]        # [..., 1]
+            tslc = cmd7[..., 6:7]                   # [..., 1], steps since last valid cmd
 
-        onehot = cmd7[..., 0:4]                 # [..., 4]
-        strength = cmd7[..., 4:5]               # [..., 1]
-        signed_strength = cmd7[..., 5:6]        # [..., 1]
-        tslc = cmd7[..., 6:7]                   # [..., 1], steps since last valid cmd
+            # command id from onehot (robust even if it's soft-ish)
+            cmd_id = torch.argmax(onehot, dim=-1)   # [...]
 
-        # command id from onehot (robust even if it's soft-ish)
-        cmd_id = torch.argmax(onehot, dim=-1)   # [...]
+            # has_cmd: 1 if not "none" else 0
+            # category index 0 is "none" by your definition
+            has_cmd = (cmd_id != 0).to(cmd7.dtype).unsqueeze(-1)  # [..., 1]
 
-        # has_cmd: 1 if not "none" else 0
-        # category index 0 is "none" by your definition
-        has_cmd = (cmd_id != 0).to(cmd7.dtype).unsqueeze(-1)  # [..., 1]
+            # category embedding
+            e = self.emb(cmd_id)                    # [..., emb_dim]
+            if self.normalize_emb:
+                e = F.normalize(e, dim=-1)
 
-        # category embedding
-        e = self.emb(cmd_id)                    # [..., emb_dim]
-        if self.normalize_emb:
-            e = F.normalize(e, dim=-1)
+            # IMPORTANT: force "none" embedding to 0, so subtraction is meaningful
+            # and "no command" does not introduce an arbitrary category vector.
+            e = e * has_cmd                          # [..., emb_dim]
 
-        # IMPORTANT: force "none" embedding to 0, so subtraction is meaningful
-        # and "no command" does not introduce an arbitrary category vector.
-        e = e * has_cmd                          # [..., emb_dim]
+            # time features (continuous, bounded, scale-controlled)
+            time_feats = []
+            if self.use_time_decay:
+                # exp decay: recent command -> ~1, long ago -> ~0
+                # clamp to avoid overflow in exp for very large tslc
+                t = torch.clamp(tslc, min=0.0, max=1e6)
+                decay = torch.exp(-t / max(self.tau, 1e-6))      # [..., 1]
+                time_feats.append(decay)
 
-        # time features (continuous, bounded, scale-controlled)
-        time_feats = []
-        if self.use_time_decay:
-            # exp decay: recent command -> ~1, long ago -> ~0
-            # clamp to avoid overflow in exp for very large tslc
-            t = torch.clamp(tslc, min=0.0, max=1e6)
-            decay = torch.exp(-t / max(self.tau, 1e-6))      # [..., 1]
-            time_feats.append(decay)
+            if self.use_time_log:
+                # normalized log time: grows slowly with tslc, stable scale
+                # divide by log1p(time_scale) to keep magnitude around [0, ~1] for typical ranges
+                denom = torch.log1p(torch.tensor(self.time_scale, device=cmd7.device, dtype=cmd7.dtype))
+                logt = torch.log1p(torch.clamp(tslc, min=0.0)) / (denom + 1e-8)   # [..., 1]
+                time_feats.append(logt)
 
-        if self.use_time_log:
-            # normalized log time: grows slowly with tslc, stable scale
-            # divide by log1p(time_scale) to keep magnitude around [0, ~1] for typical ranges
-            denom = torch.log1p(torch.tensor(self.time_scale, device=cmd7.device, dtype=cmd7.dtype))
-            logt = torch.log1p(torch.clamp(tslc, min=0.0)) / (denom + 1e-8)   # [..., 1]
-            time_feats.append(logt)
+            if len(time_feats) > 0:
+                tfeat = torch.cat(time_feats, dim=-1)            # [..., time_feat_dim]
+            else:
+                tfeat = None
 
-        if len(time_feats) > 0:
-            tfeat = torch.cat(time_feats, dim=-1)            # [..., time_feat_dim]
-        else:
-            tfeat = None
+            # Assemble features.
+            # Strength terms are already 0 when none (per your data definition),
+            # so they naturally vanish without extra masking.
+            feats = [e, strength, signed_strength]
+            if tfeat is not None:
+                feats.append(tfeat)
 
-        # Assemble features.
-        # Strength terms are already 0 when none (per your data definition),
-        # so they naturally vanish without extra masking.
-        feats = [e, strength, signed_strength]
-        if tfeat is not None:
-            feats.append(tfeat)
+            x = torch.cat(feats, dim=-1)                         # [..., in_dim]
+            u = self.proj(x)
+            return u
+        elif cmd7.size(-1) == 13:
+            # cmd_bits: [..., 13]  float/bool  (0/1 code)
+            cmd_bits = cmd7[..., 0:13].to(cmd7.dtype)
 
-        x = torch.cat(feats, dim=-1)                         # [..., in_dim]
-        u = self.proj(x)
-        return u
+            # ---- (1) bits -> word_id (0..8191) ----
+            # robust binarization (in case bits are soft-ish)
+            bits01 = (cmd_bits > 0.5).to(torch.long)  # [..., 13]
+
+            # compute integer id: sum_{b=0..12} bits[b] * 2^b
+            # NOTE: choose consistent bit order with your dataset definition.
+            # Here we treat cmd_bits[...,0] as LSB.
+            weights = (2 ** torch.arange(13, device=cmd7.device)).to(torch.long)  # [13]
+            word_id = (bits01 * weights).sum(dim=-1)  # [...], in [0, 8191]
+
+            # ---- (2) token embedding ----
+            # requires: self.word_emb = nn.Embedding(8192, emb_dim) in __init__
+            e_tok = self.word_emb(word_id)  # [..., emb_dim]
+            if self.normalize_emb:
+                e_tok = F.normalize(e_tok, dim=-1)
+
+            # ---- (3) bit-level continuous features (optional but recommended) ----
+            # requires: self.bit_mlp = nn.Sequential(nn.Linear(13, hidden_dim), nn.SiLU(), nn.Linear(hidden_dim, bit_dim))
+            # This yields a smooth embedding that changes "locally" when bits flip.
+            e_bit = self.bit_mlp(cmd_bits)  # [..., bit_dim]
+            # (optional) normalize to keep scale stable for du
+            e_bit = F.layer_norm(e_bit, (e_bit.shape[-1],))
+
+            # ---- (4) assemble ----
+            # No strength / signed_strength / tslc for BABEL token code
+            # (If you later add extra scalar features, append them here.)
+            x = torch.cat([e_tok, e_bit], dim=-1)  # [..., emb_dim + bit_dim]
+            u = self.proj(x)
+            return u    
 
 
 class ControlledSSLSDE(nn.Module):
@@ -241,6 +298,7 @@ class ControlledSSLSDE(nn.Module):
         num_bases: int = 16,
         hidden_dim: int = 64,
         init_scale: float = 0.1,
+        dataset_type: str = 'rat'
     ):
         super().__init__()
 
@@ -254,11 +312,11 @@ class ControlledSSLSDE(nn.Module):
         # B: [S, z_dim, stim_dim]
         self.A = nn.Parameter(torch.zeros(num_regimes, z_dim, z_dim))
         self.a = nn.Parameter(torch.zeros(num_regimes, z_dim))
-        # self.B = nn.Parameter(torch.zeros(num_regimes, z_dim, stim_dim))
+        self.B = nn.Parameter(torch.zeros(num_regimes, z_dim, stim_dim))
         self.B_lvl = nn.Parameter(torch.zeros(num_regimes, z_dim, stim_dim))
         self.B_evt = nn.Parameter(torch.zeros(num_regimes, z_dim, stim_dim))
 
-        self.cmd_encoder = CommandEncoder()
+        self.cmd_encoder = CommandEncoder(dataset_type=dataset_type)
         # 噪声强度 log_sigma: [S, z_dim]，Sigma_i = diag(exp(log_sigma_i))
         self.log_sigma = nn.Parameter(torch.zeros(num_regimes, z_dim))
 
@@ -280,7 +338,6 @@ class ControlledSSLSDE(nn.Module):
             num_regimes=num_regimes,
             hidden_dim=hidden_dim,
         )
-        self.monitor = DriftMonitor()
         self.sigma_gain = nn.Parameter(torch.tensor(1.0))
 
         self._init_params(init_scale)
@@ -294,7 +351,7 @@ class ControlledSSLSDE(nn.Module):
             eye = torch.eye(self.z_dim)
             for s in range(self.num_regimes):
                 self.A[s].copy_(0.1 * eye + scale * torch.randn_like(self.A[s]))
-                # self.B[s].copy_(scale * torch.randn_like(self.B[s]))
+                self.B[s].copy_(scale * torch.randn_like(self.B[s]))
                 self.B_lvl[s].copy_(scale * torch.randn_like(self.B_lvl[s]))
                 self.B_evt[s].copy_(0.5 * scale * torch.randn_like(self.B_evt[s]))
                 self.a[s].zero_()
@@ -425,19 +482,6 @@ class ControlledSSLSDE(nn.Module):
 
         # ---- combine
         drift = f0 + (w_level * f_level) + (w_event * f_event)
-
-        self.monitor.record(
-            t=0,
-            z=z,
-            z_next=0,
-            u_dot=u_dot,
-            f0=f0,
-            f_level=f_level,
-            f_event=f_event,
-            pi=pi,
-            pi_prev=0,
-            sigma=0,
-        )
                 
         # optional: global contraction for long-horizon stability
         if contract_lam and contract_lam > 0.0:
@@ -525,156 +569,29 @@ def simulate_sde_paths(
 
     z = z0
     zs = []
-
+    drifts = []
+    sigmas = []
+    
     sqrt_dt = math.sqrt(dt)
     u_seq_emb = sde.cmd_encoder(u_seq)
 
     for t in range(T):
         u_t = u_seq[:, t, :]  # [B, stim_dim]
         u_prev = u_seq[:, t-1, :] if t > 0 else u_t  # t=0 => du=0
-        # drift = sde.drift(z, u_t)      # [B, z_dim]
-        drift = sde.drift(z, u_t, dt=dt, u_prev=u_prev, w_level=1.0, w_event=1.0, clip_udot=10.0)
+        drift = sde.drift(z, u_t)      # [B, z_dim]
+        # drift = sde.drift(z, u_t, dt=dt, u_prev=u_prev, w_level=1.0, w_event=1.0, clip_udot=10.0)
         sigma = sde.diffusion(z)       # [B, z_dim]
         noise = torch.randn(B, z_dim, device=device, dtype=dtype)  # dW_t ~ N(0, dt)
         z = z + drift * dt + sigma * sqrt_dt * noise
 
         zs.append(z)
-    # sde.monitor.save(path="/root/CogFlow/results_rat/cor_fm/None_/log/sde_monitor.pt")
+        drifts.append(drift)
+        sigmas.append(sigma)
+        
     z_seq = torch.stack(zs, dim=1)  # [B, T, z_dim]
+    drift_seq = torch.stack(drifts, dim=1)  # [B, T, z_dim]
+    sigma_seq = torch.stack(sigmas, dim=1)  # [B, T, z_dim]
     return z_seq
-
-
-import torch
-import math
-from collections import defaultdict
-
-class DriftMonitor:
-    """
-    Lightweight plugin to record intermediate variables for controlled SDE drift.
-
-    Usage:
-        monitor = DriftMonitor()
-        monitor.record(t, z, z_next, u_dot, f0, f_level, f_event, pi, sigma)
-        stats = monitor.summary()
-    """
-
-    def __init__(self, eps: float = 1e-8):
-        self.eps = eps
-        self.buffers = defaultdict(list)
-
-    @staticmethod
-    def _norm(x: torch.Tensor) -> torch.Tensor:
-        return torch.linalg.norm(x, dim=-1)  # [B]
-
-    @staticmethod
-    def _entropy(pi: torch.Tensor, eps: float) -> torch.Tensor:
-        # pi: [B,S]
-        return -(pi * torch.log(pi + eps)).sum(dim=-1)
-
-    def record(
-        self,
-        *,
-        t: int,
-        z: torch.Tensor,          # [B,z]
-        z_next: torch.Tensor,     # [B,z]
-        u_dot: torch.Tensor | None,
-        f0: torch.Tensor,         # [B,z]
-        f_level: torch.Tensor,    # [B,z]
-        f_event: torch.Tensor,    # [B,z]
-        pi: torch.Tensor,         # [B,S]
-        pi_prev: torch.Tensor | None,
-        sigma: torch.Tensor,      # [B,z]
-    ):
-        """
-        Record per-step statistics (batch-averaged).
-        """
-        with torch.no_grad():
-            # norms
-            self.buffers["z_norm"].append(self._norm(z).mean().item())
-            self.buffers["dz_norm"].append(self._norm(z_next - z).mean().item())
-            self.buffers["f0_norm"].append(self._norm(f0).mean().item())
-            self.buffers["f_level_norm"].append(self._norm(f_level).mean().item())
-            self.buffers["f_event_norm"].append(self._norm(f_event).mean().item())
-            # self.buffers["sigma_norm"].append(self._norm(sigma).mean().item())
-
-            # ratios
-            ratio_event = (
-                self._norm(f_event) / (self._norm(f0) + self.eps)
-            ).mean().item()
-            self.buffers["ratio_event"].append(ratio_event)
-
-            # control
-            if u_dot is not None:
-                self.buffers["u_dot_norm"].append(self._norm(u_dot).mean().item())
-            else:
-                self.buffers["u_dot_norm"].append(0.0)
-
-            # regime stats
-            self.buffers["pi_entropy"].append(
-                self._entropy(pi, self.eps).mean().item()
-            )
-
-            if pi_prev is not None:
-                self.buffers["pi_delta_norm"].append(
-                    torch.linalg.norm(pi - pi_prev, dim=-1).mean().item()
-                )
-            else:
-                self.buffers["pi_delta_norm"].append(0.0)
-
-    def summary(self) -> dict:
-        """
-        Return all recorded stats as python lists.
-        """
-        return dict(self.buffers)
-
-    def clear(self):
-        self.buffers.clear()
-
-    def save(
-        self,
-        path: str,
-        *,
-        prefix: str = "drift_monitor",
-        with_timestamp: bool = True,
-    ) -> str:
-        """
-        Save recorded buffers to disk as a .pt file.
-
-        Args:
-            path: directory to save into
-            prefix: filename prefix
-            with_timestamp: whether to append timestamp
-
-        Returns:
-            full_path: saved file path
-        """
-        os.makedirs(path, exist_ok=True)
-
-        if with_timestamp:
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            fname = f"{prefix}_{ts}.pt"
-        else:
-            fname = f"{prefix}.pt"
-
-        full_path = os.path.join(path, fname)
-
-        torch.save(
-            {
-                "buffers": self.summary(),
-            },
-            full_path,
-        )
-        return full_path
-
-    @staticmethod
-    def load(path: str) -> dict:
-        """
-        Load a saved drift monitor file.
-
-        Returns:
-            dict with key "buffers"
-        """
-        return torch.load(path, map_location="cpu")
     
 
 if __name__ == "__main__":

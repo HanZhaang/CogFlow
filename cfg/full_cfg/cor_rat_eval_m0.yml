@@ -22,7 +22,7 @@ eval_on_train: False
 checkpt_freq: 5
 max_num_ckpts: 5
 load_pretrained: False
-ckpt_path: '/root/CogFlow/results_rat/cor_rat_fm_m1-/None_/models/checkpoint_best.pt'
+ckpt_path: '/root/CogFlow/results_rat/cor_rat_fm_m1-/m0_baseline/models/checkpoint_best.pt'
 
 # ---------------- pub hyper para ----------------
 
