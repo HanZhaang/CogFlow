@@ -31,6 +31,11 @@ We address this challenge by introducing MoFlow, a novel Motion prediction condi
 
 Our MoFlow can generate diverse trajectories that are physically and socially plausible. Moreover, our one-step student model IMLE is **100** times faster than the teacher flow model during sampling!
 
+## Docs
+
+- New unified training/evaluation usage: [docs/USAGE_GUIDE_ZH.md](docs/USAGE_GUIDE_ZH.md)
+- `train.py` call flow and internal function routing: [docs/TRAIN_CALL_FLOW_ZH.md](docs/TRAIN_CALL_FLOW_ZH.md)
+
 ## 🛠️ Environment Setup
 
 ```bash

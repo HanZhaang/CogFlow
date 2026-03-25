@@ -21,7 +21,7 @@ class ETHMotionTransformer(nn.Module):
 
         assert not use_pre_norm, "Pre-norm is not supported in this model"
 
-        self.context_encoder = build_context_encoder(self.model_cfg.CONTEXT_ENCODER, use_pre_norm)
+        self.context_encoder = build_context_encoder(self.model_cfg.CONTEXT_ENCODER, use_pre_norm, config.device)
 
         ### serves the purpose of positional encoding
         self.motion_query_embedding = nn.Embedding(self.model_cfg.NUM_PROPOSED_QUERY, self.dim)
@@ -157,7 +157,7 @@ class ETHIMLETransformer(nn.Module):
 
         assert not use_pre_norm, "Pre-norm is not supported in this model"
 
-        self.context_encoder = build_context_encoder(self.model_cfg.CONTEXT_ENCODER, use_pre_norm)
+        self.context_encoder = build_context_encoder(self.model_cfg.CONTEXT_ENCODER, use_pre_norm, config.device)
 
         ### serves the purpose of positional encoding
         if self.objective == 'set':

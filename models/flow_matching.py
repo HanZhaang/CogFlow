@@ -17,6 +17,7 @@ from utils.utils import LossBuffer
 
 from models.model_registry import register_model
 from models.backbone import MotionTransformer
+from models.backbone_eth_ucy import ETHMotionTransformer
 
 ModelPrediction = namedtuple('ModelPrediction', ['pred_vel', 'pred_data', 'pred_score'])
 
@@ -696,12 +697,46 @@ class FlowMatcher(nn.Module):
         self.cfg.stats["fut_std"] = self.cfg.stats["fut_std"].cuda()
         return self.p_losses(x, log_dict)
 
+    def training_step(self, batch, log_dict=None):
+        loss, reg, cls, vel, ctrl, stab = self.forward(batch, log_dict=log_dict)
+        from models.forecast import LossOutput
+
+        return LossOutput(
+            total=loss,
+            metrics={
+                "reg": reg,
+                "cls": cls,
+                "vel": vel,
+                "ctrl": ctrl,
+                "stab": stab,
+            },
+        )
+
+    def predict(self, batch, num_samples: int, return_trace: bool = False):
+        samples, pred_traj_at_t, t_seq, y_t_seq, pred_score = self.sample(
+            batch, num_trajs=num_samples, return_all_states=return_trace
+        )
+        from models.forecast import PredictionOutput
+
+        return PredictionOutput(
+            samples=samples,
+            trace_samples=pred_traj_at_t,
+            trace_times=t_seq,
+            scores=pred_score,
+            extras={"y_t_seq": y_t_seq},
+        )
+
 @register_model("cogflow")
 def build_cogflow(cfg, args, logger):
 	"""
 	Build the network for the denoising model.
 	"""
-	model = MotionTransformer(
+	if getattr(cfg, 'dataset', None) in ['eth_ucy', 'sdd']:
+		model_cls = ETHMotionTransformer
+	else:
+		model_cls = MotionTransformer
+
+	model = model_cls(
 		model_config=cfg.MODEL,
 		logger=logger,
 		config=cfg,

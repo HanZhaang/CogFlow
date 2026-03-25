@@ -4,7 +4,11 @@ import argparse
 import copy
 from torch.utils.data import DataLoader, random_split
 from tensorboardX import SummaryWriter
+from easydict import EasyDict
 
+import data  # noqa: F401
+import models  # noqa: F401
+import trainer  # noqa: F401
 
 from utils.config import Config
 from utils.utils import back_up_code_git, set_random_seed, log_config_to_file
@@ -26,8 +30,75 @@ def parse_config():
 	# Basic configuration
 	parser.add_argument('--cfg', default='cfg/rat/cor_fm.yml', type=str, help="Config file path")
 	parser.add_argument('--exp', type=str, help="explaination")
+	parser.add_argument('--method', type=str, choices=['cogflow', 'latent_ar', 'rssm'], help="Forecast method")
+	parser.add_argument('--variant', type=str, help="Method variant, e.g. gru")
+	parser.add_argument('--decoder', type=str, choices=['moflow_structured', 'mlp'], help="Decoder backend")
+	parser.add_argument('--enable_dissipativity', action='store_true', help="Enable dissipativity constraint")
+	parser.add_argument('--dissipativity_weight', type=float, default=None, help="Constraint weight override")
 
 	return parser.parse_args()
+
+
+def apply_runtime_overrides(cfg, args):
+	dataset_name_map = {
+		'rat': 'rat_dataset',
+		'babel': 'babel_dataset',
+		'nba': 'nba_dataset',
+		'eth_ucy': 'eth_dataset',
+		'sdd': 'sdd_dataset',
+	}
+	if cfg.get('dataset_name', None) is None and cfg.get('dataset', None) in dataset_name_map:
+		cfg.dataset_name = dataset_name_map[cfg.dataset]
+
+	method_name = args.method or cfg.get('method_name', None) or cfg.get('denoising_method', 'cogflow')
+	if method_name == 'fm':
+		method_name = 'cogflow'
+
+	method_cfg = cfg.yml_dict.get('METHOD', EasyDict())
+	if not isinstance(method_cfg, EasyDict):
+		method_cfg = EasyDict(method_cfg)
+	method_cfg.NAME = method_name
+	method_cfg.VARIANT = args.variant or method_cfg.get('VARIANT', 'gru')
+	method_cfg.DECODER = args.decoder or method_cfg.get('DECODER', 'moflow_structured')
+	method_cfg.TRAINER = method_cfg.get('TRAINER', 'forecast')
+	cfg.yml_dict['METHOD'] = method_cfg
+
+	if method_name == 'cogflow':
+		cfg.trainer_name = 'cogflow'
+		cfg.denoising_method = cfg.get('denoising_method', 'fm')
+	else:
+		cfg.trainer_name = 'forecast'
+		cfg.denoising_method = method_name
+
+	constraints_cfg = cfg.yml_dict.get('CONSTRAINTS', EasyDict())
+	if not isinstance(constraints_cfg, EasyDict):
+		constraints_cfg = EasyDict(constraints_cfg)
+	constraints_cfg.ENABLED = constraints_cfg.get('ENABLED', False) or args.enable_dissipativity
+	items = list(constraints_cfg.get('ITEMS', []))
+	if constraints_cfg.ENABLED and len(items) == 0:
+		items = [EasyDict({
+			'NAME': 'dissipativity',
+			'WEIGHT': 0.1,
+			'STATE_KEY': 'state_seq',
+			'HIDDEN_DIM': cfg.MODEL.CONTEXT_ENCODER.D_MODEL,
+			'MARGIN': 0.0,
+		})]
+	if args.dissipativity_weight is not None:
+		if len(items) == 0:
+			items = [EasyDict({'NAME': 'dissipativity'})]
+		items[0]['WEIGHT'] = args.dissipativity_weight
+	constraints_cfg.ITEMS = items
+	cfg.yml_dict['CONSTRAINTS'] = constraints_cfg
+
+	if method_name != 'cogflow':
+		cfg.MODEL.LATENT_DIM = cfg.MODEL.get('LATENT_DIM', cfg.MODEL.get('COG_D_Z', 64))
+		cfg.MODEL.LATENT_AR_HIDDEN_DIM = cfg.MODEL.get('LATENT_AR_HIDDEN_DIM', cfg.MODEL.CONTEXT_ENCODER.D_MODEL)
+		cfg.MODEL.RSSM_STOCH_DIM = cfg.MODEL.get('RSSM_STOCH_DIM', cfg.MODEL.get('COG_D_Z', 64))
+		cfg.MODEL.RSSM_DET_DIM = cfg.MODEL.get('RSSM_DET_DIM', cfg.MODEL.CONTEXT_ENCODER.D_MODEL)
+		cfg.MODEL.RSSM_OBS_DIM = cfg.MODEL.get('RSSM_OBS_DIM', cfg.MODEL.get('COG_D_Z', 64))
+		cfg.MODEL.RSSM_DECODER_LATENT_DIM = cfg.MODEL.get('RSSM_DECODER_LATENT_DIM', cfg.MODEL.get('COG_D_Z', 64))
+		cfg.BASELINE_LOSS_WEIGHTS = cfg.get('BASELINE_LOSS_WEIGHTS', EasyDict({'recon': 1.0, 'latent_nll': 0.1}))
+		cfg.RSSM_KL_BETA = cfg.get('RSSM_KL_BETA', 0.1)
 
 
 def init_basics(args):
@@ -37,6 +108,7 @@ def init_basics(args):
 
 	"""Load the config file"""
 	cfg = Config(args.cfg, f'{args.exp}')
+	apply_runtime_overrides(cfg, args)
 
 	tag = '_'
 

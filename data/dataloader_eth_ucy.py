@@ -6,7 +6,9 @@ import math
 from einops import rearrange
 import torch
 import matplotlib.pyplot as plt
+from torch.utils.data import DataLoader
 from utils.normalization import normalize_min_max
+from data.dataset_registry import register_dataset
 
 
 def seq_collate_eth(batch):
@@ -341,3 +343,43 @@ class ETHDatasetSocialGAN:
                 data.append(line)
         return np.asarray(data)
 
+
+@register_dataset("eth_dataset")
+def build_eth_dataloader(cfg, args):
+    train_dset = ETHDataset(
+        cfg=cfg,
+        training=True,
+        data_dir=cfg.data_dir,
+        subset=cfg.subset,
+        rotate_time_frame=cfg.get('rotate_time_frame', 0),
+        type=cfg.get('data_source', 'hist10pred20'),
+    )
+
+    train_loader = DataLoader(
+        train_dset,
+        batch_size=cfg.train_batch_size,
+        shuffle=False,
+        num_workers=cfg.get('num_workers', 4),
+        collate_fn=seq_collate_eth,
+        pin_memory=True,
+    )
+
+    test_dset = ETHDataset(
+        cfg=cfg,
+        training=False,
+        data_dir=cfg.data_dir,
+        subset=cfg.subset,
+        rotate_time_frame=cfg.get('rotate_time_frame', 0),
+        type=cfg.get('data_source', 'hist10pred20'),
+    )
+
+    test_loader = DataLoader(
+        test_dset,
+        batch_size=cfg.test_batch_size,
+        shuffle=False,
+        num_workers=cfg.get('num_workers', 4),
+        collate_fn=seq_collate_eth,
+        pin_memory=True,
+    )
+
+    return train_loader, test_loader

@@ -132,7 +132,8 @@ class Trainer(object):
             self.denoising_steps = cfg.sampling_steps
             self.denoising_schedule = cfg.t_schedule 
         else:
-            raise NotImplementedError(f'Denoising method [{cfg.denoising_method}] is not implemented yet.')
+            self.denoising_steps = cfg.get('sampling_steps', cfg.future_frames)
+            self.denoising_schedule = cfg.get('t_schedule', cfg.denoising_method)
         
         self.save_dir = Path(cfg.cfg_dir)
 
@@ -190,6 +191,13 @@ class Trainer(object):
     @property
     def device(self):
         return self.cfg.device
+
+    def _loss_to_float(self, value):
+        if isinstance(value, np.ndarray):
+            return float(value.mean())
+        if torch.is_tensor(value):
+            return value.detach().mean().item()
+        return float(value)
 
     def save_ckpt(self, ckpt_name):
         if not self.accelerator.is_local_main_process:
@@ -294,15 +302,26 @@ class Trainer(object):
                     # log to tensorboard
                     if self.tb_log is not None:
                         self.tb_log.add_scalar('train/loss_total', loss.item(), self.step)
-                        self.tb_log.add_scalar('train/loss_reg', loss_reg.item(), self.step)
-                        self.tb_log.add_scalar('train/loss_cls', loss_cls.item(), self.step)
-                        self.tb_log.add_scalar('train/loss_vel', loss_vel.item(), self.step)
-                        self.tb_log.add_scalar('train/loss_ctrl', loss_ctrl.item(), self.step)
-                        self.tb_log.add_scalar('train/loss_stab', loss_stab.item(), self.step)
+                        self.tb_log.add_scalar('train/loss_reg', self._loss_to_float(loss_reg), self.step)
+                        self.tb_log.add_scalar('train/loss_cls', self._loss_to_float(loss_cls), self.step)
+                        self.tb_log.add_scalar('train/loss_vel', self._loss_to_float(loss_vel), self.step)
+                        self.tb_log.add_scalar('train/loss_ctrl', self._loss_to_float(loss_ctrl), self.step)
+                        self.tb_log.add_scalar('train/loss_stab', self._loss_to_float(loss_stab), self.step)
                         # self.tb_log.add_scalar('train/loss_stab', loss_stab.item(), self.step)
                         self.tb_log.add_scalar('train/learning_rate', self.opt.param_groups[0]["lr"], self.step)
                 # 以 self.step 作为横坐标（全局 step）
-                pbar.set_description(f'total loss: {total_loss:.4f}, loss_reg: {loss_reg:.4f}, loss_cls: {loss_cls:.4f}, loss_vel: {loss_vel:.4f}, loss_ctrl: {loss_ctrl.item():.4f}, loss_stab: {loss_stab.item():.4f}, lr: {self.opt.param_groups[0]["lr"]:.6f}')
+                pbar.set_description(
+                    'total loss: {:.4f}, loss_reg: {:.4f}, loss_cls: {:.4f}, loss_vel: {:.4f}, '
+                    'loss_ctrl: {:.4f}, loss_stab: {:.4f}, lr: {:.6f}'.format(
+                        total_loss,
+                        self._loss_to_float(loss_reg),
+                        self._loss_to_float(loss_cls),
+                        self._loss_to_float(loss_vel),
+                        self._loss_to_float(loss_ctrl),
+                        self._loss_to_float(loss_stab),
+                        self.opt.param_groups[0]["lr"],
+                    )
+                )
                 # 更新进度条的文本：显示这次梯度累积窗口的损失统计与当前 LR。
                 accelerator.wait_for_everyone()
                 accelerator.clip_grad_norm_(self.denoiser.parameters(), self.cfg.OPTIMIZATION.GRAD_NORM_CLIP)
@@ -338,7 +357,8 @@ class Trainer(object):
 
                 self.step += 1
                 pbar.update(1)
-                self.scheduler.step() 
+                if self.scheduler is not None:
+                    self.scheduler.step() 
 
                 # end of one training iteration
             # end of training loop
@@ -811,6 +831,26 @@ def build_cogflow_fm_trainer(cfg, model, train_loader, val_loader, tb_log, logge
         tb_log=tb_log, logger=logger,
         gradient_accumulate_every=1, ema_decay = 0.995, ema_update_every = 1,
     ) 
+
+
+@register_trainer("forecast")
+def build_forecast_trainer(cfg, model, train_loader, val_loader, tb_log, logger):
+    return Trainer(
+        cfg, model,
+        train_loader, val_loader,
+        tb_log=tb_log, logger=logger,
+        gradient_accumulate_every=1, ema_decay=0.995, ema_update_every=1,
+    )
+
+
+@register_trainer("latent_ar")
+def build_latent_ar_trainer(cfg, model, train_loader, val_loader, tb_log, logger):
+    return build_forecast_trainer(cfg, model, train_loader, val_loader, tb_log, logger)
+
+
+@register_trainer("rssm")
+def build_rssm_trainer(cfg, model, train_loader, val_loader, tb_log, logger):
+    return build_forecast_trainer(cfg, model, train_loader, val_loader, tb_log, logger)
          
     
     @torch.no_grad()
@@ -1220,4 +1260,3 @@ def build_cogflow_fm_trainer(cfg, model, train_loader, val_loader, tb_log, logge
         }
         self.logger.info(f"[ClassTol] Done. total_events = {total_events}")
         return results
-

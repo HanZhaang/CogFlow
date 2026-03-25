@@ -12,7 +12,13 @@ def register_trainer(name: str):
     return wrapper
 
 def build_trainer(cfg, model, train_loader, val_loader, tb_log, logger):
-    trainer_name = getattr(cfg, "trainer_name", None) or getattr(cfg.MODEL, "NAME", None)
+    import trainer  # noqa: F401
+
+    trainer_name = getattr(cfg, "trainer_name", None)
+    if trainer_name is None and getattr(cfg, "METHOD", None) is not None:
+        trainer_name = getattr(cfg.METHOD, "TRAINER", None)
+    if trainer_name is None:
+        trainer_name = getattr(cfg.MODEL, "NAME", None)
     if trainer_name is None:
         raise ValueError("cfg.trainer_name (or cfg.model_name) is required.")
     if trainer_name not in _TRAINER_REGISTRY:
