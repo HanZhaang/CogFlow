@@ -648,11 +648,14 @@ class Trainer(object):
 
             pred_traj, pred_traj_t, t_seq, y_t_seq, pred_score = self.sample_from_denoising_model(data)
             print("pred_traj shape = {}".format(pred_traj.shape))
-            pred_trajs.append(pred_traj)
-            hits_trajs.append(data["past_traj_original_scale"])
-            hist_cond_cue.append(data["hist_cond_cue"])
-            fut_cond_cue.append(data["fut_cond_cue"])
-            fut_trajs.append(data['fut_traj'])
+            if save_trajs:
+                pred_trajs.append(pred_traj.detach().cpu())
+                hits_trajs.append(data["past_traj_original_scale"].detach().cpu())
+                if "hist_cond_cue" in data:
+                    hist_cond_cue.append(data["hist_cond_cue"].detach().cpu())
+                if "fut_cond_cue" in data:
+                    fut_cond_cue.append(data["fut_cond_cue"].detach().cpu())
+                fut_trajs.append(data['fut_traj'].detach().cpu())
 
             # 没还原对比没还原
             fut_traj = rearrange(data['fut_traj'], 'b a f d -> (b a) f d')               # [B, A, T, F] -> [B * A, T, F]
@@ -769,7 +772,6 @@ class Trainer(object):
             pred_trajs_np = []
             for item in pred_trajs:
                 item = rearrange(item, '(b a) k f d -> b k a f d', a=self.cfg.agents)  # [B, K, A, F, D]
-                item = item.cpu()
                 item = unnormalize_mean_std(item, self.cfg.stats["fut_mean"], self.cfg.stats["fut_std"],0)  # [B, K, A, T, D]
                 item = item.detach().numpy()
                 pred_trajs_np.append(item)
@@ -779,29 +781,22 @@ class Trainer(object):
             print("pred shape = {}".format(pred_trajs_np.shape))
             np.save("/root/CogFlow/visualize/trajs/pred_trajs.npy", pred_trajs_np)
 
-            hits_trajs = [item.cpu().detach().numpy() for item in hits_trajs]
-            # print(hits_trajs[0].shape)
-            arr = np.concatenate(hits_trajs, axis=0)  # 形状变为 (N, T, 2)
+            arr = np.concatenate([item.numpy() for item in hits_trajs], axis=0)  # 形状变为 (N, T, 2)
             # print(arr.shape)
             np.save("/root/CogFlow/visualize/trajs/hist_trajs.npy", arr)
 
-            hist_cond_cue = [item.cpu().detach().numpy() for item in hist_cond_cue]
-            # print(cue_trajs[0].shape)
-            arr = np.concatenate(hist_cond_cue, axis=0)  # 形状变为 (N, T, 2)
-            # print(arr.shape)
-            np.save("/root/CogFlow/visualize/trajs/hist_cue_trajs.npy", arr)
+            if len(hist_cond_cue) > 0:
+                arr = np.concatenate([item.numpy() for item in hist_cond_cue], axis=0)  # 形状变为 (N, T, 2)
+                np.save("/root/CogFlow/visualize/trajs/hist_cue_trajs.npy", arr)
 
-            fut_cond_cue = [item.cpu().detach().numpy() for item in fut_cond_cue]
-            # print(cue_trajs[0].shape)
-            arr = np.concatenate(fut_cond_cue, axis=0)  # 形状变为 (N, T, 2)
-            # print(arr.shape)
-            np.save("/root/CogFlow/visualize/trajs/fut_cue_trajs.npy", arr)
+            if len(fut_cond_cue) > 0:
+                arr = np.concatenate([item.numpy() for item in fut_cond_cue], axis=0)  # 形状变为 (N, T, 2)
+                np.save("/root/CogFlow/visualize/trajs/fut_cue_trajs.npy", arr)
 
             # fut_trajs = [item.cpu().detach().numpy() for item in fut_gt_trajs]
             fut_trajs_np = []
             for item in fut_trajs:
                 # item = rearrange(item, '(b a) f d -> b a f d', a=self.cfg.agents)  # [B, K, A, F, D]
-                item = item.cpu()
                 # print(self.cfg.stats["fut_mean"], self.cfg.stats["fut_std"])
                 item = unnormalize_mean_std(item, self.cfg.stats["fut_mean"], self.cfg.stats["fut_std"],0)  # [B, K, A, T, D]
                 item = item.detach().numpy()
