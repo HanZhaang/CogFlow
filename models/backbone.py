@@ -216,7 +216,7 @@ class MotionTransformer(nn.Module):
             pass
         return y_emb
     
-    def get_z_rollout(self, x_data):
+    def get_z_rollout(self, x_data, return_terms: bool = False):
         past_traj = x_data["past_traj"]
         hist_stim = x_data["hist_cond_cue"]
         # 2.1) 编码初始隐变量 z0
@@ -230,13 +230,18 @@ class MotionTransformer(nn.Module):
             dtype=z0.dtype,
         )                                          # [B, T_f, stim_dim]
 
-        z_seq = simulate_sde_paths(
+        rollout_out = simulate_sde_paths(
             sde=self.neural_sde,
             z0=z0,
             u_seq=u_seq,
             dt=self.dt,
-        )                                          # [B, T_f, d_dim]
-        return z_seq, u_seq
+            return_terms=return_terms,
+        )
+        if return_terms:
+            rollout_out["z0"] = z0
+            rollout_out["u_seq"] = u_seq
+            return rollout_out
+        return rollout_out, u_seq
         
     def forward(self, y, time, x_data):
         '''
@@ -281,8 +286,20 @@ class MotionTransformer(nn.Module):
             gamma, beta = self.cond_film_gamma(cond_bka), self.cond_film_beta(cond_bka)
             y_emb = gamma * y_emb + beta    # 在此直接融合
 
+        rollout_aux = None
+        need_rollout_aux = (
+            self.config.get('LOSS_CTRL', False)
+            or self.config.get('LOSS_STAB', False)
+            or self.config.get('LOSS_BND', {}).get('ENABLE', False)
+        )
+
         if self.ablation_mode == "m2":
-            z_seq, u_seq = self.get_z_rollout(x_data)
+            rollout_out = self.get_z_rollout(x_data, return_terms=need_rollout_aux)
+            if need_rollout_aux:
+                rollout_aux = rollout_out
+                z_seq = rollout_out["z_seq"]
+            else:
+                z_seq, _ = rollout_out
             z_frame = self.z_seq_proj(z_seq)
             z_frame_bka = z_frame[:, None, None, :, :].expand(B, K, A, self.T_f, self.dim)
 
@@ -365,8 +382,8 @@ class MotionTransformer(nn.Module):
 
         # denoiser_cls = self.cls_head(readout_token).squeeze(-1) 						# [B, K, A]
         
-        if self.config.LOSS_CTRL or self.config.LOSS_STAB:
-            return denoiser_x, (z_seq, u_seq)
+        if need_rollout_aux:
+            return denoiser_x, rollout_aux
         else:
             return denoiser_x
         

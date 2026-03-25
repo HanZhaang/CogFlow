@@ -33,8 +33,8 @@ def parse_config():
 	parser.add_argument('--method', type=str, choices=['cogflow', 'latent_ar', 'rssm'], help="Forecast method")
 	parser.add_argument('--variant', type=str, help="Method variant, e.g. gru")
 	parser.add_argument('--decoder', type=str, choices=['moflow_structured', 'mlp'], help="Decoder backend")
-	parser.add_argument('--enable_dissipativity', action='store_true', help="Enable dissipativity constraint")
-	parser.add_argument('--dissipativity_weight', type=float, default=None, help="Constraint weight override")
+	parser.add_argument('--enable_dissipativity', action='store_true', help="Enable boundedness loss (legacy alias)")
+	parser.add_argument('--dissipativity_weight', type=float, default=None, help="Boundedness loss weight override (legacy alias)")
 
 	return parser.parse_args()
 
@@ -70,24 +70,48 @@ def apply_runtime_overrides(cfg, args):
 		cfg.trainer_name = 'forecast'
 		cfg.denoising_method = method_name
 
+	loss_bnd_cfg = cfg.yml_dict.get('LOSS_BND', EasyDict())
+	if not isinstance(loss_bnd_cfg, EasyDict):
+		loss_bnd_cfg = EasyDict(loss_bnd_cfg)
+	loss_bnd_cfg.ENABLE = loss_bnd_cfg.get('ENABLE', False)
+	loss_bnd_cfg.WEIGHT = float(loss_bnd_cfg.get('WEIGHT', 1e-3))
+	loss_bnd_cfg.WARMUP_EPOCHS = int(loss_bnd_cfg.get('WARMUP_EPOCHS', 10))
+	loss_bnd_cfg.RAMP_EPOCHS = int(loss_bnd_cfg.get('RAMP_EPOCHS', 20))
+	loss_bnd_cfg.ALPHA = float(loss_bnd_cfg.get('ALPHA', 0.01))
+	loss_bnd_cfg.BETA = float(loss_bnd_cfg.get('BETA', 1.0))
+	loss_bnd_cfg.TAU = float(loss_bnd_cfg.get('TAU', 1.0))
+	loss_bnd_cfg.LATE_ONLY = bool(loss_bnd_cfg.get('LATE_ONLY', True))
+	loss_bnd_cfg.LATE_RATIO = float(loss_bnd_cfg.get('LATE_RATIO', 0.5))
+	loss_bnd_cfg.BETA_MODE = str(loss_bnd_cfg.get('BETA_MODE', 'fixed'))
+	loss_bnd_cfg.BETA_QUANTILE = float(loss_bnd_cfg.get('BETA_QUANTILE', 0.95))
+	loss_bnd_cfg.DETACH_BETA_STAT = bool(loss_bnd_cfg.get('DETACH_BETA_STAT', True))
+	loss_bnd_cfg.NORM_MODE = str(loss_bnd_cfg.get('NORM_MODE', 'sum'))
+
+	if method_name == 'cogflow':
+		loss_bnd_cfg.ENABLE = bool(loss_bnd_cfg.ENABLE or args.enable_dissipativity)
+		if args.dissipativity_weight is not None:
+			loss_bnd_cfg.WEIGHT = float(args.dissipativity_weight)
+	cfg.yml_dict['LOSS_BND'] = loss_bnd_cfg
+
 	constraints_cfg = cfg.yml_dict.get('CONSTRAINTS', EasyDict())
 	if not isinstance(constraints_cfg, EasyDict):
 		constraints_cfg = EasyDict(constraints_cfg)
-	constraints_cfg.ENABLED = constraints_cfg.get('ENABLED', False) or args.enable_dissipativity
-	items = list(constraints_cfg.get('ITEMS', []))
-	if constraints_cfg.ENABLED and len(items) == 0:
-		items = [EasyDict({
-			'NAME': 'dissipativity',
-			'WEIGHT': 0.1,
-			'STATE_KEY': 'state_seq',
-			'HIDDEN_DIM': cfg.MODEL.CONTEXT_ENCODER.D_MODEL,
-			'MARGIN': 0.0,
-		})]
-	if args.dissipativity_weight is not None:
-		if len(items) == 0:
-			items = [EasyDict({'NAME': 'dissipativity'})]
-		items[0]['WEIGHT'] = args.dissipativity_weight
-	constraints_cfg.ITEMS = items
+	if method_name != 'cogflow':
+		constraints_cfg.ENABLED = constraints_cfg.get('ENABLED', False) or args.enable_dissipativity
+		items = list(constraints_cfg.get('ITEMS', []))
+		if constraints_cfg.ENABLED and len(items) == 0:
+			items = [EasyDict({
+				'NAME': 'dissipativity',
+				'WEIGHT': 0.1,
+				'STATE_KEY': 'state_seq',
+				'HIDDEN_DIM': cfg.MODEL.CONTEXT_ENCODER.D_MODEL,
+				'MARGIN': 0.0,
+			})]
+		if args.dissipativity_weight is not None:
+			if len(items) == 0:
+				items = [EasyDict({'NAME': 'dissipativity'})]
+			items[0]['WEIGHT'] = args.dissipativity_weight
+		constraints_cfg.ITEMS = items
 	cfg.yml_dict['CONSTRAINTS'] = constraints_cfg
 
 	if method_name != 'cogflow':

@@ -15,6 +15,7 @@ from utils.normalization import unnormalize_min_max, unnormalize_sqrt, unnormali
 from utils.utils import apply_mask
 from utils.utils import LossBuffer
 
+from models.losses import BoundednessLoss, get_boundedness_weight
 from models.model_registry import register_model
 from models.backbone import MotionTransformer
 from models.backbone_eth_ucy import ETHMotionTransformer
@@ -99,11 +100,30 @@ class FlowMatcher(nn.Module):
             from models.utils.sigma_theta_loss import SigmaThetaCond
             self.sigma_theta = SigmaThetaCond(z_dim=self.cfg.MODEL.COG_D_Z, u_dim=self.cfg.MODEL.COND_D_CUE,
                                             hidden_dim=self.cfg.MODEL.CONTEXT_ENCODER.D_MODEL, use_time=False)
-        
+        self.loss_bnd_cfg = cfg.get('LOSS_BND', {})
+        self.use_loss_bnd = bool(self.loss_bnd_cfg.get('ENABLE', False))
+        if (self.cfg.LOSS_CTRL or self.cfg.LOSS_STAB or self.use_loss_bnd) and getattr(self.cfg, 'CNSDE', None) != 'm2':
+            raise ValueError("LOSS_CTRL / LOSS_STAB / LOSS_BND currently require CNSDE='m2' with explicit SDE rollout.")
+        if self.use_loss_bnd:
+            self.boundedness_loss = BoundednessLoss(
+                alpha=float(self.loss_bnd_cfg.get('ALPHA', 0.01)),
+                beta=float(self.loss_bnd_cfg.get('BETA', 1.0)),
+                tau=float(self.loss_bnd_cfg.get('TAU', 1.0)),
+                late_only=bool(self.loss_bnd_cfg.get('LATE_ONLY', True)),
+                late_ratio=float(self.loss_bnd_cfg.get('LATE_RATIO', 0.5)),
+                beta_mode=str(self.loss_bnd_cfg.get('BETA_MODE', 'fixed')),
+                beta_quantile=float(self.loss_bnd_cfg.get('BETA_QUANTILE', 0.95)),
+                detach_beta_stat=bool(self.loss_bnd_cfg.get('DETACH_BETA_STAT', True)),
+                norm_mode=str(self.loss_bnd_cfg.get('NORM_MODE', 'sum')),
+            )
+
 
     @property
     def device(self):
         return self.cfg.device
+
+    def _needs_rollout_aux(self) -> bool:
+        return bool(self.cfg.LOSS_CTRL or self.use_loss_bnd or self.cfg.LOSS_STAB)
     
     def get_precond_coef(self, t):
         """
@@ -244,8 +264,8 @@ class FlowMatcher(nn.Module):
         #     y_t_in = y_t
 
         # model_out, pred_score = self.model(y_t_in, t, x_data = x)
-        if self.cfg.LOSS_CTRL or self.cfg.LOSS_STAB:
-            model_out, (z_seq, u_seq) = self.model(y_t_in, t, x_data = x)
+        if self._needs_rollout_aux():
+            model_out, _ = self.model(y_t_in, t, x_data=x)
         else:
             model_out = self.model(y_t_in, t, x_data = x)
         
@@ -492,10 +512,11 @@ class FlowMatcher(nn.Module):
         # self.model: 输入（噪声/中间态 y_t_in, 时间 t, 上下文 x_data），输出：
         #   - model_out: [B, K, A, T*D]  速度/残差/去噪方向（取决于 fm_wrapper_func 的定义）
         #   - denoiser_cls: [B, K, A]    每个候选分支的logits，用于选择/分类损失（可选）
-        if self.cfg.LOSS_CTRL or self.cfg.LOSS_STAB:
-            model_out, (z_seq, u_seq) = self.model(y_t_in, t, x_data=x_data)  # [B, K, A, T * D] + [B, K, A]
+        if self._needs_rollout_aux():
+            model_out, rollout_aux = self.model(y_t_in, t, x_data=x_data)  # [B, K, A, T * D] + rollout trace
         else:
             model_out = self.model(y_t_in, t, x_data=x_data)  # [B, K, A, T * D] + [B, K, A]
+            rollout_aux = None
 
         # 把网络输出包一层“FM包装器”：根据FM定义把 model_out 映射到“去噪后的 y”（如 ŷ_0 或 ŷ_{t-Δ}）
         # 常见：Rectified Flow时 denoised_y = y_t + Δt * v_theta(x_t,t)；或 Wrapper 把速度场转换为数据空间
@@ -529,20 +550,15 @@ class FlowMatcher(nn.Module):
             x_data_plus = self._make_x_data_plus(x_data, delta=self.ctrl_delta)
 
             # 2) 用同一 y_t_in、t 做第二次 forward 得到 denoised_y_plus（保持噪声路径一致）
-            model_out_plus, (z_seq_plus, u_seq_plus) = self.model(y_t_in, t, x_data=x_data_plus)
+            model_out_plus, rollout_aux_plus = self.model(y_t_in, t, x_data=x_data_plus)
             denoised_y_plus = self.fm_wrapper_func(y_t, t, model_out_plus)  # [B,K,A,T*D]
             denoised_y_plus = rearrange(denoised_y_plus, 'b k a (f d) -> b k a f d', f=self.cfg.future_frames)
 
-            # 3) 取 controlled SDE rollout：Z 与 Z_plus
-            #    要求你提供接口：self.model.get_z_rollout(x_data, T)
-            #    推荐返回 shape: [B, A, T, Zdim]
-            Z, u = self.model.get_z_rollout(x_data)         # [B,A,T,Z]
+            # 3) 直接使用 forward 中的 rollout trace，避免重复仿真
+            Z = rollout_aux["z_seq"]         # [B,T,Z]
             Z = repeat(Z, 'b t z -> b a t z', a=denoised_y_plus.shape[2])
-            # print("Z shape = {}".format(Z.shape))
-            	
-            Zp, u = self.model.get_z_rollout(x_data_plus)   # [B,A,T,Z]
+            Zp = rollout_aux_plus["z_seq"]   # [B,T,Z]
             Zp = repeat(Zp, 'b t z -> b a t z', a=denoised_y_plus.shape[2])
-            # print("Zp shape = {}".format(Zp.shape))
             
             # 4) 有限差分：Δx, Δz
             #    Δx: [B,K,A,T,2]（若D>2取前2维）
@@ -604,6 +620,36 @@ class FlowMatcher(nn.Module):
         else:
             raise ValueError(f"Unknown reduction method: {self.cfg.get('LOSS_REG_REDUCTION', 'mean')}")
 
+        loss_ctrl = torch.zeros(1, device=self.device)
+        loss_stab = torch.zeros(1, device=self.device)
+        loss_bnd = torch.zeros(1, device=self.device)
+        lambda_bnd = 0.0
+
+        if self.cfg.get('LOSS_STAB', False):
+            sigma = self.sigma_theta(Z=rollout_aux["z_seq"], u=rollout_aux["u_seq"])  # or self.sigma_theta(Z_rollout, t_seq, u_seq)
+            loss_stab = (sigma.pow(2).sum(dim=-1)).mean()
+
+        if self.use_loss_bnd:
+            cur_epoch = 0 if log_dict is None else int(log_dict.get('cur_epoch', 0))
+            lambda_bnd = get_boundedness_weight(
+                cur_epoch,
+                enabled=self.use_loss_bnd,
+                base_weight=float(self.loss_bnd_cfg.get('WEIGHT', 1e-3)),
+                warmup_epochs=int(self.loss_bnd_cfg.get('WARMUP_EPOCHS', 10)),
+                ramp_epochs=int(self.loss_bnd_cfg.get('RAMP_EPOCHS', 20)),
+            )
+            if lambda_bnd > 0.0:
+                loss_bnd, bnd_stats = self.boundedness_loss(
+                    state_seq=rollout_aux["state_seq"],
+                    drift_seq=rollout_aux["drift_seq"],
+                    sigma_seq=rollout_aux["sigma_seq"],
+                )
+                if log_dict is not None:
+                    log_dict.update(bnd_stats)
+            if log_dict is not None:
+                log_dict["lambda_bnd"] = float(lambda_bnd)
+                log_dict["loss_bnd"] = loss_bnd.detach()
+
         # ---------- 组件选择（“赢家通吃” best-of-K），同时训练分类头 ----------
         if self.cfg.LOSS_NN_MODE == 'scene':
             # 1) 在场景级上选择：对每个样本取使 scene 误差最小的那个K分支
@@ -624,8 +670,7 @@ class FlowMatcher(nn.Module):
             loss_reg_b = denoising_error_per_agent.gather(1, selected_components[:, None, :]).squeeze(1)  	# [B, A]
             # 再对A平均成 [B]
             loss_reg_b = loss_reg_b.mean(dim=-1)  # [B]
-            
-            loss_ctrl = torch.zeros(1, device=self.device)
+
             if self.cfg.get('LOSS_CTRL', False):
                 # ctrl_err_scene: [B,K] -> gather best branch -> [B]
                 # print("ctrl_err_scene shape = {}".format(ctrl_err_agent.shape))
@@ -633,12 +678,7 @@ class FlowMatcher(nn.Module):
                 # print("selected_components_ctrl shape = {}".format(selected_components_ctrl.shape))
                 loss_ctrl_b = ctrl_err_agent.gather(1, selected_components_ctrl[:, None, :]).squeeze(1)  # [B]
                 loss_ctrl = loss_ctrl_b.mean()  # scalar
-            
-            loss_stab = torch.zeros(1, device=self.device)
-            if self.cfg.get('LOSS_STAB', False):
-                sigma = self.sigma_theta(Z=z_seq, u=u_seq)  # or self.sigma_theta(Z_rollout, t_seq, u_seq)
-                loss_stab = (sigma.pow(2).sum(dim=-1)).mean()
-            
+
             # 分类头：把 [B,K,A] 拉平为 [B*A,K]，每个agent各自做分类
             # cls_logits = rearrange(denoiser_cls, 'b k a -> (b a) k')	# [B * A, K]
             # cls_labels = selected_components.view(-1)					# [B * A]
@@ -679,7 +719,8 @@ class FlowMatcher(nn.Module):
                weight_cls * loss_cls.mean() + \
                weight_vel * loss_reg_vel.mean() + \
                weight_ctrl * loss_ctrl + \
-               weight_stab + loss_stab
+               weight_stab * loss_stab + \
+               lambda_bnd * loss_bnd
 
         # ---------- 分噪声级别(loss per level) 记录 ----------
         # 记录不同 t（或噪声等级）的损失曲线，便于诊断FM在各时间的学习情况

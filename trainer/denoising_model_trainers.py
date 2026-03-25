@@ -4,6 +4,7 @@ import copy
 import math
 import os
 import pickle
+import gc
 import numpy as np 
 import matplotlib.pyplot as plt
 
@@ -199,6 +200,24 @@ class Trainer(object):
             return value.detach().mean().item()
         return float(value)
 
+    def _write_log_dict_scalars(self, log_dict, prefix: str = 'train'):
+        if self.tb_log is None or log_dict is None:
+            return
+        for key, value in log_dict.items():
+            if key == 'cur_epoch':
+                continue
+            if isinstance(value, dict):
+                for sub_key, sub_value in value.items():
+                    try:
+                        self.tb_log.add_scalar(f'{prefix}/{key}/{sub_key}', self._loss_to_float(sub_value), self.step)
+                    except (TypeError, ValueError):
+                        continue
+                continue
+            try:
+                self.tb_log.add_scalar(f'{prefix}/{key}', self._loss_to_float(value), self.step)
+            except (TypeError, ValueError):
+                continue
+
     def save_ckpt(self, ckpt_name):
         if not self.accelerator.is_local_main_process:
             return
@@ -309,6 +328,7 @@ class Trainer(object):
                         self.tb_log.add_scalar('train/loss_stab', self._loss_to_float(loss_stab), self.step)
                         # self.tb_log.add_scalar('train/loss_stab', loss_stab.item(), self.step)
                         self.tb_log.add_scalar('train/learning_rate', self.opt.param_groups[0]["lr"], self.step)
+                        self._write_log_dict_scalars(log_dict, prefix='train')
                 # 以 self.step 作为横坐标（全局 step）
                 pbar.set_description(
                     'total loss: {:.4f}, loss_reg: {:.4f}, loss_cls: {:.4f}, loss_vel: {:.4f}, '
@@ -499,6 +519,7 @@ class Trainer(object):
         self.logger.info(f'testing complete with the {mode} ckpt')
 
 
+    @torch.no_grad()
     def sample_from_denoising_model(self, data):
         """
         Return the samples from denoising model in normal scale
@@ -605,6 +626,7 @@ class Trainer(object):
         pickle.dump(states_to_save, open(save_path, 'wb'))
 
     
+    @torch.no_grad()
     def eval_dataloader(self, testing_mode=False, training_err_check=False, save_trajs=False):
         """
         General API to evaluate the dataloader/dataset
@@ -721,6 +743,10 @@ class Trainer(object):
                 self.save_latent_states(t_seq_ls, y_t_seq_ls, y_pred_data_ls, x_data_ls, pred_score_ls, save_name)
                 
                 t_seq_ls, y_t_seq_ls, y_pred_data_ls, x_data_ls, pred_score_ls = [], [], [], [], []
+
+            del data, pred_traj, pred_traj_t, t_seq, y_t_seq, pred_score, distances, distances_t, fut_traj, fut_traj_gt
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
                 
         end.record()
         torch.cuda.synchronize()
@@ -812,6 +838,10 @@ class Trainer(object):
                 fut = fut_trajs_np,    # (N,B,A,F,D)
                 compress = True
             )
+
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         return fut_traj_gt, performance, num_trajs
     
