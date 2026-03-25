@@ -417,14 +417,15 @@ class Trainer(object):
         ckpt_states = torch.load(self.cfg.ckpt_path, map_location=self.device, weights_only=True)
 
         self.denoiser = self.accelerator.unwrap_model(self.denoiser)
-        self.denoiser.load_state_dict(ckpt_states['model'])
+        self.denoiser.load_state_dict(ckpt_states['model'], strict=False)
         if self.accelerator.is_main_process:
-            self.ema.load_state_dict(ckpt_states["ema"])
+            self.ema.load_state_dict(ckpt_states["ema"], strict=False)
   
         # testing_mode=False, training_err_check=False
         if eval_on_train:
             fut_traj_gt, _, _ = self.eval_dataloader(training_err_check=True, save_trajs=True)
         else:
+            print("test on test dataset")
             fut_traj_gt, _, _ = self.eval_dataloader(testing_mode=True, save_trajs=True)
         
         self.logger.info(f'testing complete with the {mode} ckpt')
@@ -781,6 +782,7 @@ class Trainer(object):
             for item in fut_trajs:
                 # item = rearrange(item, '(b a) f d -> b a f d', a=self.cfg.agents)  # [B, K, A, F, D]
                 item = item.cpu()
+                # print(self.cfg.stats["fut_mean"], self.cfg.stats["fut_std"])
                 item = unnormalize_mean_std(item, self.cfg.stats["fut_mean"], self.cfg.stats["fut_std"],0)  # [B, K, A, T, D]
                 item = item.detach().numpy()
                 fut_trajs_np.append(item)

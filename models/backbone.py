@@ -80,6 +80,7 @@ class MotionTransformer(nn.Module):
                 num_bases=16,
                 hidden_dim=self.dim,
                 init_scale=0.1,
+                dataset_type=self.model_cfg.CONTEXT_ENCODER.DATA_TYPE
             )
             self.z_seq_proj =  nn.Linear(self.model_cfg.get('COG_D_Z', 0), self.dim)
             self.z_seq_gamma = nn.Linear(self.dim, self.dim)

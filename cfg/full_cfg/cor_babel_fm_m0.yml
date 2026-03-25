@@ -60,8 +60,10 @@ LOSS_NN_MODE: 'agent' # choices=['agent', 'scene', 'both']
 LOSS_REG_REDUCTION: 'sum' # ['mean', 'sum']
 LOSS_REG_SQUARED: False # Whether to use the squared regression loss.
 LOSS_VELOCITY: False
-
-CNSDE       : False
+LOSS_CTRL: False
+LOSS_STAB: False
+CNSDE       : "m0"
+CTRL_U_KEY: 'fut_cond_cue'
 weight_decay: null
 
 # -------------------- Logger config -----------------------------
@@ -108,8 +110,8 @@ denoising_head_preds         : 20
 k_preds                      : 20
 
 # ------------------------------- Optimizer Parameters ---------------------------------
-train_batch_size             : 768
-test_batch_size              : 768
+train_batch_size             : 512
+test_batch_size              : 512
 
 OPTIMIZATION:
     NUM_EPOCHS: 600

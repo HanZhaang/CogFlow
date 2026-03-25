@@ -61,8 +61,9 @@ LOSS_NN_MODE: 'agent' # choices=['agent', 'scene', 'both']
 LOSS_REG_REDUCTION: 'sum' # ['mean', 'sum']
 LOSS_REG_SQUARED: False # Whether to use the squared regression loss.
 LOSS_VELOCITY: False
-
-CNSDE       : True
+LOSS_CTRL: False
+LOSS_STAB: False
+CNSDE       : 'm2'
 weight_decay: null
 
 # -------------------- Logger config -----------------------------
