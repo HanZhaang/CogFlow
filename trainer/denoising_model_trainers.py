@@ -663,6 +663,7 @@ class Trainer(object):
         hist_cond_cue = []
         fut_cond_cue = []
         fut_trajs = []
+        last_fut_traj_gt = None
 
         for i_batch, data in enumerate(dl): 
             bs = int(data['batch_size'])
@@ -682,6 +683,7 @@ class Trainer(object):
             # 没还原对比没还原
             fut_traj = rearrange(data['fut_traj'], 'b a f d -> (b a) f d')               # [B, A, T, F] -> [B * A, T, F]
             fut_traj_gt = fut_traj.unsqueeze(1).repeat(1, self.cfg.denoising_head_preds, 1, 1)          # [B * A, K, T, F]
+            last_fut_traj_gt = fut_traj_gt
             distances = (fut_traj_gt - pred_traj).norm(p=2, dim=-1)                                     # [B * A, K, T]
             distances_t = (pred_traj_t - fut_traj_gt.unsqueeze(1)).norm(p=2, dim=-1)                    # [B * A, S, K, T]
             
@@ -843,7 +845,7 @@ class Trainer(object):
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-        return fut_traj_gt, performance, num_trajs
+        return last_fut_traj_gt, performance, num_trajs
     
 
 from trainer.trainer_registry import register_trainer
