@@ -3,10 +3,11 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 from einops import rearrange
+from easydict import EasyDict
 
 from models.components.constraints import build_constraints
 from models.components.decoders import build_sequence_decoder
-from models.components.dynamics import LatentARGRU, gaussian_nll, reparameterize
+from models.components.dynamics import build_latent_ar_dynamics, gaussian_nll, reparameterize
 from models.components.encoders import ForecastHistoryEncoder, SkeletonFrameEncoder
 from models.forecast import BaseForecastMethod, LossOutput, PredictionOutput
 from models.model_registry import register_model
@@ -33,12 +34,7 @@ class LatentARMethod(BaseForecastMethod):
             latent_dim=self.latent_dim,
             hidden_dim=self.hidden_dim,
         )
-        self.dynamics = LatentARGRU(
-            latent_dim=self.latent_dim,
-            ctrl_dim=self.ctrl_dim,
-            ctx_dim=cfg.MODEL.CONTEXT_ENCODER.D_MODEL,
-            hidden_dim=self.hidden_dim,
-        )
+        self.dynamics = self._build_dynamics()
 
         decoder_name = cfg.METHOD.get("DECODER", cfg.get("decoder_name", "moflow_structured"))
         self.decoder = build_sequence_decoder(
@@ -51,6 +47,37 @@ class LatentARMethod(BaseForecastMethod):
         )
         self.constraints = build_constraints(cfg, state_dim=self.latent_dim, ctrl_dim=self.ctrl_dim)
 
+    def _build_dynamics(self):
+        dynamics_cfg = self.cfg.MODEL.get("LATENT_AR_DYNAMICS", EasyDict())
+        if not isinstance(dynamics_cfg, EasyDict):
+            dynamics_cfg = EasyDict(dynamics_cfg)
+        dynamics_name = dynamics_cfg.get("NAME", self.cfg.METHOD.get("VARIANT", "gru"))
+
+        common_kwargs = dict(
+            latent_dim=self.latent_dim,
+            ctrl_dim=self.ctrl_dim,
+            ctx_dim=self.cfg.MODEL.CONTEXT_ENCODER.D_MODEL,
+        )
+        if dynamics_name == "gru":
+            return build_latent_ar_dynamics(
+                "gru",
+                hidden_dim=int(dynamics_cfg.get("HIDDEN_DIM", self.hidden_dim)),
+                **common_kwargs,
+            )
+        if dynamics_name == "transformer":
+            d_model = int(dynamics_cfg.get("D_MODEL", self.hidden_dim))
+            return build_latent_ar_dynamics(
+                "transformer",
+                d_model=d_model,
+                num_layers=int(dynamics_cfg.get("NUM_LAYERS", 2)),
+                num_heads=int(dynamics_cfg.get("NUM_HEADS", 4)),
+                dropout=float(dynamics_cfg.get("DROPOUT", 0.1)),
+                ffn_dim=int(dynamics_cfg.get("FFN_DIM", d_model * 4)),
+                max_seq_len=int(dynamics_cfg.get("MAX_SEQ_LEN", self.future_frames + 1)),
+                **common_kwargs,
+            )
+        raise ValueError(f"Unsupported latent_ar dynamics variant '{dynamics_name}'")
+
     def _future_ctrl(self, batch):
         if "fut_cond_cue" in batch:
             return batch["fut_cond_cue"]
@@ -58,10 +85,10 @@ class LatentARMethod(BaseForecastMethod):
         return hist[:, -1:, :].expand(-1, self.future_frames, -1)
 
     def _teacher_forced_rollout(self, scene_ctx, target_latents, ctrl_seq):
-        hidden, prev_latent = self.dynamics.init_state(scene_ctx)
+        dyn_state, prev_latent = self.dynamics.init_state(scene_ctx)
         mean_seq, logvar_seq = [], []
         for t in range(self.future_frames):
-            hidden, mean_t, logvar_t = self.dynamics.step(prev_latent, ctrl_seq[:, t], scene_ctx, hidden)
+            dyn_state, mean_t, logvar_t = self.dynamics.step(prev_latent, ctrl_seq[:, t], scene_ctx, dyn_state)
             mean_seq.append(mean_t)
             logvar_seq.append(logvar_t)
             prev_latent = target_latents[:, t] if self.teacher_forcing else mean_t
@@ -109,10 +136,10 @@ class LatentARMethod(BaseForecastMethod):
         scene_ctx_bk = scene_ctx[:, None, :].expand(B, K, -1).reshape(B * K, -1)
         ctrl_bk = ctrl_seq[:, None, :, :].expand(B, K, -1, -1).reshape(B * K, self.future_frames, -1)
 
-        hidden, prev_latent = self.dynamics.init_state(scene_ctx_bk)
+        dyn_state, prev_latent = self.dynamics.init_state(scene_ctx_bk)
         rollout = []
         for t in range(self.future_frames):
-            hidden, mean_t, logvar_t = self.dynamics.step(prev_latent, ctrl_bk[:, t], scene_ctx_bk, hidden)
+            dyn_state, mean_t, logvar_t = self.dynamics.step(prev_latent, ctrl_bk[:, t], scene_ctx_bk, dyn_state)
             prev_latent = reparameterize(mean_t, logvar_t, sample=True)
             rollout.append(prev_latent)
 

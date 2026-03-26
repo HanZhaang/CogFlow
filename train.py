@@ -31,7 +31,7 @@ def parse_config():
 	parser.add_argument('--cfg', default='cfg/rat/cor_fm.yml', type=str, help="Config file path")
 	parser.add_argument('--exp', type=str, help="explaination")
 	parser.add_argument('--method', type=str, choices=['cogflow', 'latent_ar', 'rssm'], help="Forecast method")
-	parser.add_argument('--variant', type=str, help="Method variant, e.g. gru")
+	parser.add_argument('--variant', type=str, help="Method variant, e.g. gru or transformer")
 	parser.add_argument('--decoder', type=str, choices=['moflow_structured', 'mlp'], help="Decoder backend")
 	parser.add_argument('--enable_dissipativity', action='store_true', help="Enable boundedness loss (legacy alias)")
 	parser.add_argument('--dissipativity_weight', type=float, default=None, help="Boundedness loss weight override (legacy alias)")

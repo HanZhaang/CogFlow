@@ -53,7 +53,7 @@ python train.py --cfg <config_path> --exp <exp_name> [额外参数]
 - `--cfg`: 配置文件路径
 - `--exp`: 实验名
 - `--method`: `cogflow | latent_ar | rssm`
-- `--variant`: 方法子类型，当前主要给 `latent_ar` 预留，推荐 `gru`
+- `--variant`: 方法子类型，当前主要给 `latent_ar` 预留，支持 `gru | transformer`
 - `--decoder`: `moflow_structured | mlp`
 - `--enable_dissipativity`: 打开耗散性约束
 - `--dissipativity_weight`: 覆盖耗散性约束权重
@@ -89,6 +89,17 @@ python train.py \
   --method latent_ar \
   --variant gru \
   --decoder mlp
+```
+
+Latent-AR + Transformer dynamics:
+
+```bash
+python train.py \
+  --cfg cfg/full_cfg/cor_rat_fm_mn.yml \
+  --exp rat_latent_ar_transformer \
+  --method latent_ar \
+  --variant transformer \
+  --decoder moflow_structured
 ```
 
 RSSM + MoFlow-style decoder:
@@ -306,4 +317,3 @@ python eval.py --cfg auto --ckpt_path <path_to_checkpoint>
 
 - `rssm + moflow_structured + dissipativity`
 - `rssm + mlp + dissipativity`
-

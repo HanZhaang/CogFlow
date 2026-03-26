@@ -44,7 +44,7 @@ def add_eval_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument('--lin_poly_long_step', type=int, default=1000, help='Long step for lin_poly.')
 
     parser.add_argument('--method', type=str, choices=['cogflow', 'latent_ar', 'rssm'], help='Forecast method override.')
-    parser.add_argument('--variant', type=str, help='Method variant, e.g. gru.')
+    parser.add_argument('--variant', type=str, help='Method variant, e.g. gru or transformer.')
     parser.add_argument('--decoder', type=str, choices=['moflow_structured', 'mlp'], help='Decoder backend override.')
     parser.add_argument('--enable_dissipativity', action='store_true', help='Enable dissipativity constraint.')
     parser.add_argument('--dissipativity_weight', type=float, default=None, help='Dissipativity weight override.')
