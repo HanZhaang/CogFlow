@@ -124,6 +124,28 @@ python train.py \
   --dissipativity_weight 0.1
 ```
 
+### 2.3 预设配置文件
+
+为了避免只靠 CLI 覆盖隐式默认值，仓库新增了 RAT 数据集下的 baseline 预设配置：
+
+- `cfg/baselines/rat/latent_ar_gru_moflow.yml`
+- `cfg/baselines/rat/latent_ar_gru_mlp.yml`
+- `cfg/baselines/rat/latent_ar_transformer_moflow.yml`
+- `cfg/baselines/rat/latent_ar_transformer_mlp.yml`
+- `cfg/baselines/rat/rssm_moflow.yml`
+- `cfg/baselines/rat/rssm_mlp.yml`
+
+这些配置已经显式写出：
+
+- `METHOD.NAME / METHOD.VARIANT / METHOD.DECODER`
+- `LATENT_AR_DYNAMICS`
+- `RSSM_STOCH_DIM / RSSM_DET_DIM / RSSM_OBS_DIM / RSSM_DECODER_LATENT_DIM`
+- `BASELINE_LOSS_WEIGHTS`
+- `RSSM_KL_BETA`
+- `CONSTRAINTS`
+
+其中 `rssm` 当前只提供 decoder 变体；代码里还没有单独的 `gru/transformer` RSSM dynamics 开关。
+
 
 ## 3. 统一评估入口
 

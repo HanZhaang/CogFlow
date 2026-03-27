@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import Any, Dict
 
 import torch
@@ -77,7 +78,11 @@ class _ForecastAdapter(MethodAdapter):
         self.trainer.denoiser.eval()
 
     def inference_step(self, batch: Dict[str, Any], num_samples: int) -> torch.Tensor:
-        pred = self.trainer.denoiser.predict(batch, num_samples=num_samples, return_trace=False)
+        if self.cfg.METHOD.NAME == "cogflow":
+            with self._temporary_num_samples(num_samples):
+                pred = self.trainer.denoiser.predict(batch, num_samples=num_samples, return_trace=False)
+        else:
+            pred = self.trainer.denoiser.predict(batch, num_samples=num_samples, return_trace=False)
         return pred.samples
 
     def get_inference_metadata(self, num_samples: int) -> Dict[str, Any]:
@@ -91,6 +96,21 @@ class _ForecastAdapter(MethodAdapter):
         if num_samples > 1:
             label = f"{label} x {num_samples}"
         return {"horizon": horizon, "steps_nfe": label}
+
+    @contextmanager
+    def _temporary_num_samples(self, num_samples: int):
+        original = int(self.cfg.denoising_head_preds)
+        if original == num_samples:
+            yield
+            return
+
+        self.cfg.denoising_head_preds = int(num_samples)
+        self.cfg.k_preds = int(num_samples)
+        try:
+            yield
+        finally:
+            self.cfg.denoising_head_preds = original
+            self.cfg.k_preds = original
 
 
 @register_method("cogflow")
