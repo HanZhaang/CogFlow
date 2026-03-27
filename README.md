@@ -35,6 +35,7 @@ Our MoFlow can generate diverse trajectories that are physically and socially pl
 
 - New unified training/evaluation usage: [docs/USAGE_GUIDE_ZH.md](docs/USAGE_GUIDE_ZH.md)
 - `train.py` call flow and internal function routing: [docs/TRAIN_CALL_FLOW_ZH.md](docs/TRAIN_CALL_FLOW_ZH.md)
+- Compute-cost benchmark usage: [docs/COMPUTE_BENCHMARK_ZH.md](docs/COMPUTE_BENCHMARK_ZH.md)
 
 ## 🛠️ Environment Setup
 
