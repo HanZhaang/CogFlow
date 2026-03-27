@@ -8,6 +8,7 @@ import benchmark.adapters  # noqa: F401
 from benchmark.registry import list_registered_methods
 from benchmark.runner import BenchmarkRunner
 from benchmark.utils import (
+    build_result_label,
     create_benchmark_logger,
     flatten_infer_rows,
     flatten_train_row,
@@ -72,11 +73,15 @@ def main():
 
         result = {
             "method": method,
+            "variant": getattr(cfg.METHOD, "VARIANT", None),
+            "decoder": getattr(cfg.METHOD, "DECODER", None),
             "params": adapter.count_params(),
             "trainable_params": adapter.count_trainable_params(),
             "batch_size": adapter.batch_size(cached_batch),
             "env": {"gpu": gpu_name()},
+            "config": {"cfg": args.cfg, "split": args.split, "batch_index": args.batch_index},
         }
+        result["label"] = build_result_label(result)
 
         if "train" in args.mode:
             logger.info("Running training benchmark for method=%s", method)

@@ -6,6 +6,16 @@
 python benchmark_cost.py --cfg cfg/full_cfg/cor_rat_fm_mn.yml --method all --print-markdown
 ```
 
+多份 JSON 结果可通过聚合脚本整理成表格：
+
+```bash
+python benchmark_collect.py \
+  --inputs "/tmp/cogflow_benchmark/*.json" \
+  --output-train-csv /tmp/cogflow_benchmark/all_train.csv \
+  --output-infer-csv /tmp/cogflow_benchmark/all_infer.csv \
+  --output-markdown /tmp/cogflow_benchmark/all_tables.md
+```
+
 ## 设计原则
 
 - 所有方法复用同一套 runner，不在各方法内部埋不同统计逻辑。
@@ -143,9 +153,21 @@ for cfg in cfg/baselines/rat/*.yml; do
 done
 ```
 
+批量跑完后，把所有 JSON 汇总成统一表格：
+
+```bash
+python benchmark_collect.py \
+  --inputs /tmp/cogflow_benchmark/*.json \
+  --output-train-csv /tmp/cogflow_benchmark/summary_train.csv \
+  --output-infer-csv /tmp/cogflow_benchmark/summary_infer.csv \
+  --output-markdown /tmp/cogflow_benchmark/summary_tables.md \
+  --print-markdown
+```
+
 ## 注意事项
 
 - 最公平的用法是固定 `cfg`、`split`、`batch-index`、`warmup`、`repeat` 和 `K`。
 - 若使用 `train` split，建议同时指定 `--batch-cache`，避免 dataloader shuffle 导致不同方法拿到不同 batch。
 - 批量 benchmark 时，建议所有组合共享同一个 `--batch-cache`，这样 `variant` 和 `decoder` 之间吃到的是同一份输入。
+- 新版 benchmark JSON 会显式写入 `label / variant / decoder`；旧 JSON 若缺这些字段，聚合脚本会回退到文件名作为表格行名。
 - 当前 `cogflow` 路径默认依赖 CUDA；若在 CPU 上运行，部分旧代码路径可能不可用。

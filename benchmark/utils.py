@@ -121,9 +121,32 @@ def write_csv(rows: Sequence[Dict[str, Any]], path: str) -> None:
         writer.writerows(rows)
 
 
+def build_result_label(result: Dict[str, Any], fallback_label: Optional[str] = None) -> str:
+    label = result.get("label")
+    if label:
+        return str(label)
+
+    method = str(result.get("method", fallback_label or "unknown"))
+    variant = result.get("variant")
+    decoder = result.get("decoder")
+
+    parts = [method]
+    if variant:
+        parts.append(str(variant))
+    if decoder:
+        parts.append(str(decoder))
+
+    if len(parts) == 1 and fallback_label:
+        return fallback_label
+    return "_".join(parts)
+
+
 def flatten_train_row(result: Dict[str, Any]) -> Dict[str, Any]:
     row = {
+        "label": build_result_label(result),
         "method": result["method"],
+        "variant": result.get("variant"),
+        "decoder": result.get("decoder"),
         "params_m": round(result["params"] / 1e6, 4),
         "gpu": result["env"]["gpu"],
         "batch": result["batch_size"],
@@ -151,7 +174,10 @@ def flatten_infer_rows(result: Dict[str, Any]) -> List[Dict[str, Any]]:
     for infer_stats in result.get("infer", []):
         rows.append(
             {
+                "label": build_result_label(result),
                 "method": result["method"],
+                "variant": result.get("variant"),
+                "decoder": result.get("decoder"),
                 "gpu": result["env"]["gpu"],
                 "batch": result["batch_size"],
                 "k": infer_stats.get("k"),
@@ -254,3 +280,25 @@ def normalize_method_list(method: str, available: Iterable[str]) -> List[str]:
     if method == "all":
         return list(available)
     return [method]
+
+
+def resolve_result_files(inputs: Sequence[str]) -> List[Path]:
+    resolved: List[Path] = []
+    seen = set()
+    for item in inputs:
+        path = Path(item)
+        matches: List[Path] = []
+        if any(ch in item for ch in ["*", "?", "["]):
+            matches = sorted(Path().glob(item))
+        elif path.is_dir():
+            matches = sorted(path.glob("*.json"))
+        elif path.exists():
+            matches = [path]
+
+        for match in matches:
+            match = match.resolve()
+            if match in seen:
+                continue
+            seen.add(match)
+            resolved.append(match)
+    return resolved
