@@ -146,6 +146,58 @@ python train.py \
 
 其中 `rssm` 当前只提供 decoder 变体；代码里还没有单独的 `gru/transformer` RSSM dynamics 开关。
 
+### 2.4 自动遍历所有 variant 和 decoder 组合
+
+最稳的方式是直接遍历 [cfg/baselines/rat](/Users/zhanghan/01_code/CogFlow/cfg/baselines/rat) 目录下的预设配置，而不是在循环里临时拼接大量 CLI 覆盖参数。
+
+遍历当前目录下全部预设：
+
+```bash
+for cfg in cfg/baselines/rat/*.yml; do
+  name=$(basename "${cfg}" .yml)
+  python train.py --cfg "${cfg}" --exp "${name}"
+done
+```
+
+只遍历 `latent_ar` 的 `variant x decoder`：
+
+```bash
+for variant in gru transformer; do
+  for decoder in moflow mlp; do
+    cfg="cfg/baselines/rat/latent_ar_${variant}_${decoder}.yml"
+    exp="rat_latent_ar_${variant}_${decoder}"
+    python train.py --cfg "${cfg}" --exp "${exp}"
+  done
+done
+```
+
+只遍历 `rssm` 的 decoder 组合：
+
+```bash
+for decoder in moflow mlp; do
+  cfg="cfg/baselines/rat/rssm_${decoder}.yml"
+  exp="rat_rssm_${decoder}"
+  python train.py --cfg "${cfg}" --exp "${exp}"
+done
+```
+
+如果你只是想快速扫超参，也可以不写预设文件，直接用 CLI 组合遍历：
+
+```bash
+for variant in gru transformer; do
+  for decoder in moflow_structured mlp; do
+    python train.py \
+      --cfg cfg/full_cfg/cor_rat_fm_mn.yml \
+      --exp "rat_latent_ar_${variant}_${decoder}" \
+      --method latent_ar \
+      --variant "${variant}" \
+      --decoder "${decoder}"
+  done
+done
+```
+
+但这个口径更依赖运行时代码默认值，不如预设 YAML 稳定。
+
 
 ## 3. 统一评估入口
 

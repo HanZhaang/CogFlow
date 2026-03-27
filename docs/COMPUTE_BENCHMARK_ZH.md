@@ -80,8 +80,72 @@ python benchmark_cost.py \
   --print-markdown
 ```
 
+遍历 `latent_ar` 的全部 `variant x decoder` 组合并分别输出结果：
+
+```bash
+for variant in gru transformer; do
+  for decoder in moflow_structured mlp; do
+    tag="latent_ar_${variant}_${decoder}"
+    python benchmark_cost.py \
+      --cfg cfg/full_cfg/cor_rat_fm_mn.yml \
+      --method latent_ar \
+      --variant "${variant}" \
+      --decoder "${decoder}" \
+      --split val \
+      --batch-cache /tmp/cogflow_benchmark/rat_val_batch0.pt \
+      --output-json "/tmp/cogflow_benchmark/${tag}.json" \
+      --output-train-csv "/tmp/cogflow_benchmark/${tag}_train.csv" \
+      --output-infer-csv "/tmp/cogflow_benchmark/${tag}_infer.csv"
+  done
+done
+```
+
+遍历 `rssm` 的 decoder 组合：
+
+```bash
+for decoder in moflow_structured mlp; do
+  tag="rssm_${decoder}"
+  python benchmark_cost.py \
+    --cfg cfg/full_cfg/cor_rat_fm_mn.yml \
+    --method rssm \
+    --decoder "${decoder}" \
+    --split val \
+    --batch-cache /tmp/cogflow_benchmark/rat_val_batch0.pt \
+    --output-json "/tmp/cogflow_benchmark/${tag}.json" \
+    --output-train-csv "/tmp/cogflow_benchmark/${tag}_train.csv" \
+    --output-infer-csv "/tmp/cogflow_benchmark/${tag}_infer.csv"
+done
+```
+
+如果你是按预设配置文件批量 benchmark，也可以直接遍历配置目录：
+
+```bash
+for cfg in cfg/baselines/rat/*.yml; do
+  name=$(basename "${cfg}" .yml)
+  case "${name}" in
+    latent_ar_*)
+      method="latent_ar"
+      ;;
+    rssm_*)
+      method="rssm"
+      ;;
+    *)
+      continue
+      ;;
+  esac
+
+  python benchmark_cost.py \
+    --cfg "${cfg}" \
+    --method "${method}" \
+    --split val \
+    --batch-cache /tmp/cogflow_benchmark/rat_val_batch0.pt \
+    --output-json "/tmp/cogflow_benchmark/${name}.json"
+done
+```
+
 ## 注意事项
 
 - 最公平的用法是固定 `cfg`、`split`、`batch-index`、`warmup`、`repeat` 和 `K`。
 - 若使用 `train` split，建议同时指定 `--batch-cache`，避免 dataloader shuffle 导致不同方法拿到不同 batch。
+- 批量 benchmark 时，建议所有组合共享同一个 `--batch-cache`，这样 `variant` 和 `decoder` 之间吃到的是同一份输入。
 - 当前 `cogflow` 路径默认依赖 CUDA；若在 CPU 上运行，部分旧代码路径可能不可用。
