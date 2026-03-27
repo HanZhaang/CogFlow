@@ -57,8 +57,10 @@ class _ForecastAdapter(MethodAdapter):
         self.trainer.opt.zero_grad()
 
     def forward_loss(self, batch: Dict[str, Any]) -> torch.Tensor:
+        iter_per_epoch = max(self.trainer.train_num_steps // self.cfg.OPTIMIZATION.NUM_EPOCHS, 1)
+        log_dict = {"cur_epoch": self.trainer.step // iter_per_epoch}
         with self.trainer.accelerator.autocast():
-            loss_out = self.trainer.denoiser.training_step(batch, log_dict={})
+            loss_out = self.trainer.denoiser.training_step(batch, log_dict=log_dict)
         return loss_out.total
 
     def backward(self, loss: torch.Tensor) -> None:
