@@ -135,6 +135,15 @@ python train.py \
 - `cfg/baselines/rat/rssm_moflow.yml`
 - `cfg/baselines/rat/rssm_mlp.yml`
 
+同时新增了 BABEL 数据集的对应预设：
+
+- `cfg/baselines/babel/latent_ar_gru_moflow.yml`
+- `cfg/baselines/babel/latent_ar_gru_mlp.yml`
+- `cfg/baselines/babel/latent_ar_transformer_moflow.yml`
+- `cfg/baselines/babel/latent_ar_transformer_mlp.yml`
+- `cfg/baselines/babel/rssm_moflow.yml`
+- `cfg/baselines/babel/rssm_mlp.yml`
+
 这些配置已经显式写出：
 
 - `METHOD.NAME / METHOD.VARIANT / METHOD.DECODER`
@@ -197,6 +206,38 @@ done
 ```
 
 但这个口径更依赖运行时代码默认值，不如预设 YAML 稳定。
+
+### 2.5 BABEL Baseline 测试脚本
+
+仓库新增了 BABEL baseline 的批量测试脚本：
+
+- `scripts/baselines/eval_babel_all.sh`
+- `scripts/baselines/eval_babel_latent_ar_all.sh`
+- `scripts/baselines/eval_babel_rssm_all.sh`
+
+默认用法：
+
+```bash
+bash scripts/baselines/eval_babel_all.sh
+```
+
+也可以指定结果根目录和评估 batch size：
+
+```bash
+bash scripts/baselines/eval_babel_all.sh results_babel 48
+```
+
+这些脚本默认按下面的路径约定寻找 checkpoint：
+
+```text
+results_babel/<cfg_name>/<cfg_name>_/models/checkpoint_best.pt
+```
+
+因此最省事的训练方式是：
+
+```bash
+python train.py --cfg cfg/baselines/babel/latent_ar_gru_moflow.yml --exp latent_ar_gru_moflow
+```
 
 
 ## 3. 统一评估入口

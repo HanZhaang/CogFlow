@@ -1,0 +1,104 @@
+# ------------------- General Options -------------------------
+description                  : Latent AR GRU with MLP Decoder
+results_root_dir             : results_babel
+dataset                      : babel
+dataset_name                 : babel_dataset
+
+num_workers                  : 4
+past_frames                  : 30
+future_frames                : 60
+agents                       : 22
+dt                           : 0.033
+checkpt_freq                 : 5
+data_dir                     : './data/babel_3060'
+
+overfit                      : False
+n_train                      : 9409
+n_test                       : 2368
+rotate                       : False
+data_norm                    : 'min_max'
+
+max_num_ckpts                : 5
+load_pretrained              : False
+ckpt_path                    : null
+
+fix_random_seed              : True
+seed                         : 42
+init_lr                      : 0.001
+
+method_name                  : latent_ar
+denoising_method             : latent_ar
+trainer_name                 : forecast
+decoder_name                 : mlp
+
+METHOD:
+  NAME: latent_ar
+  VARIANT: gru
+  DECODER: mlp
+  TRAINER: forecast
+
+BASELINE_LOSS_WEIGHTS:
+  recon: 1.0
+  latent_nll: 0.1
+
+LATENT_AR_TEACHER_FORCING    : True
+
+CONSTRAINTS:
+  ENABLED: False
+  ITEMS: []
+
+notes                        : 'LatentAR-GRU-MLP-Babel'
+
+MODEL:
+    NAME: "latent_ar"
+    AGENT_DIM: 3
+    NUM_PROPOSED_QUERY: 20
+    MODEL_OUT_DIM: 180
+    REGRESSION_MLPS: [128, 256, 64, 3]
+    CLASSIFICATION_MLPS: [128, 128, 1]
+    USE_PE_QUERY: True
+    USE_PE_AGENT: True
+    USE_PRE_NORM: False
+    COND_D_CUE: 13
+    COND_D_HIST: 16
+    COG_D_Z: 64
+    LATENT_DIM: 64
+    LATENT_AR_HIDDEN_DIM: 128
+    DECODER_TIME_CHUNK: 0
+
+    LATENT_AR_DYNAMICS:
+        NAME: gru
+        HIDDEN_DIM: 128
+
+    CONTEXT_ENCODER:
+        NAME: MTREncoder
+        DATA_TYPE: babel
+        NUM_OF_ATTN_NEIGHBORS: 22
+        NUM_INPUT_CONTEXT: 9
+        NUM_CHANNEL_IN_MLP_AGENT: 256
+        NUM_LAYER_IN_MLP_AGENT: 3
+        D_MODEL: 128
+        NUM_ATTN_LAYERS: 4
+        NUM_ATTN_HEAD: 8
+        DROPOUT_OF_ATTN: 0.1
+
+    MOTION_DECODER:
+        NAME: MTRDecoder
+        D_MODEL: 128
+        NUM_DECODER_BLOCKS: 4
+        NUM_ATTN_HEAD: 8
+        DROPOUT_OF_ATTN: 0.1
+
+denoising_head_preds         : 20
+k_preds                      : 20
+train_batch_size             : 48
+test_batch_size              : 48
+
+OPTIMIZATION:
+    NUM_EPOCHS: 600
+    OPTIMIZER: AdamW
+    LR: 0.001
+    WEIGHT_DECAY: 0.05
+    SCHEDULER: cosineAnnealingLRwithWarmup
+    LR_CLIP: 0.000001
+    GRAD_NORM_CLIP: 1.0
