@@ -4,6 +4,7 @@ import copy
 import math
 import os
 import pickle
+import gc
 import numpy as np 
 import matplotlib.pyplot as plt
 
@@ -132,7 +133,8 @@ class Trainer(object):
             self.denoising_steps = cfg.sampling_steps
             self.denoising_schedule = cfg.t_schedule 
         else:
-            raise NotImplementedError(f'Denoising method [{cfg.denoising_method}] is not implemented yet.')
+            self.denoising_steps = cfg.get('sampling_steps', cfg.future_frames)
+            self.denoising_schedule = cfg.get('t_schedule', cfg.denoising_method)
         
         self.save_dir = Path(cfg.cfg_dir)
 
@@ -190,6 +192,31 @@ class Trainer(object):
     @property
     def device(self):
         return self.cfg.device
+
+    def _loss_to_float(self, value):
+        if isinstance(value, np.ndarray):
+            return float(value.mean())
+        if torch.is_tensor(value):
+            return value.detach().mean().item()
+        return float(value)
+
+    def _write_log_dict_scalars(self, log_dict, prefix: str = 'train'):
+        if self.tb_log is None or log_dict is None:
+            return
+        for key, value in log_dict.items():
+            if key == 'cur_epoch':
+                continue
+            if isinstance(value, dict):
+                for sub_key, sub_value in value.items():
+                    try:
+                        self.tb_log.add_scalar(f'{prefix}/{key}/{sub_key}', self._loss_to_float(sub_value), self.step)
+                    except (TypeError, ValueError):
+                        continue
+                continue
+            try:
+                self.tb_log.add_scalar(f'{prefix}/{key}', self._loss_to_float(value), self.step)
+            except (TypeError, ValueError):
+                continue
 
     def save_ckpt(self, ckpt_name):
         if not self.accelerator.is_local_main_process:
@@ -294,15 +321,27 @@ class Trainer(object):
                     # log to tensorboard
                     if self.tb_log is not None:
                         self.tb_log.add_scalar('train/loss_total', loss.item(), self.step)
-                        self.tb_log.add_scalar('train/loss_reg', loss_reg.item(), self.step)
-                        self.tb_log.add_scalar('train/loss_cls', loss_cls.item(), self.step)
-                        self.tb_log.add_scalar('train/loss_vel', loss_vel.item(), self.step)
-                        self.tb_log.add_scalar('train/loss_ctrl', loss_ctrl.item(), self.step)
-                        self.tb_log.add_scalar('train/loss_stab', loss_stab.item(), self.step)
+                        self.tb_log.add_scalar('train/loss_reg', self._loss_to_float(loss_reg), self.step)
+                        self.tb_log.add_scalar('train/loss_cls', self._loss_to_float(loss_cls), self.step)
+                        self.tb_log.add_scalar('train/loss_vel', self._loss_to_float(loss_vel), self.step)
+                        self.tb_log.add_scalar('train/loss_ctrl', self._loss_to_float(loss_ctrl), self.step)
+                        self.tb_log.add_scalar('train/loss_stab', self._loss_to_float(loss_stab), self.step)
                         # self.tb_log.add_scalar('train/loss_stab', loss_stab.item(), self.step)
                         self.tb_log.add_scalar('train/learning_rate', self.opt.param_groups[0]["lr"], self.step)
+                        self._write_log_dict_scalars(log_dict, prefix='train')
                 # 以 self.step 作为横坐标（全局 step）
-                pbar.set_description(f'total loss: {total_loss:.4f}, loss_reg: {loss_reg:.4f}, loss_cls: {loss_cls:.4f}, loss_vel: {loss_vel:.4f}, loss_ctrl: {loss_ctrl.item():.4f}, loss_stab: {loss_stab.item():.4f}, lr: {self.opt.param_groups[0]["lr"]:.6f}')
+                pbar.set_description(
+                    'total loss: {:.4f}, loss_reg: {:.4f}, loss_cls: {:.4f}, loss_vel: {:.4f}, '
+                    'loss_ctrl: {:.4f}, loss_stab: {:.4f}, lr: {:.6f}'.format(
+                        total_loss,
+                        self._loss_to_float(loss_reg),
+                        self._loss_to_float(loss_cls),
+                        self._loss_to_float(loss_vel),
+                        self._loss_to_float(loss_ctrl),
+                        self._loss_to_float(loss_stab),
+                        self.opt.param_groups[0]["lr"],
+                    )
+                )
                 # 更新进度条的文本：显示这次梯度累积窗口的损失统计与当前 LR。
                 accelerator.wait_for_everyone()
                 accelerator.clip_grad_norm_(self.denoiser.parameters(), self.cfg.OPTIMIZATION.GRAD_NORM_CLIP)
@@ -338,7 +377,8 @@ class Trainer(object):
 
                 self.step += 1
                 pbar.update(1)
-                self.scheduler.step() 
+                if self.scheduler is not None:
+                    self.scheduler.step() 
 
                 # end of one training iteration
             # end of training loop
@@ -479,6 +519,7 @@ class Trainer(object):
         self.logger.info(f'testing complete with the {mode} ckpt')
 
 
+    @torch.no_grad()
     def sample_from_denoising_model(self, data):
         """
         Return the samples from denoising model in normal scale
@@ -585,6 +626,7 @@ class Trainer(object):
         pickle.dump(states_to_save, open(save_path, 'wb'))
 
     
+    @torch.no_grad()
     def eval_dataloader(self, testing_mode=False, training_err_check=False, save_trajs=False):
         """
         General API to evaluate the dataloader/dataset
@@ -621,6 +663,7 @@ class Trainer(object):
         hist_cond_cue = []
         fut_cond_cue = []
         fut_trajs = []
+        last_fut_traj_gt = None
 
         for i_batch, data in enumerate(dl): 
             bs = int(data['batch_size'])
@@ -628,15 +671,19 @@ class Trainer(object):
 
             pred_traj, pred_traj_t, t_seq, y_t_seq, pred_score = self.sample_from_denoising_model(data)
             print("pred_traj shape = {}".format(pred_traj.shape))
-            pred_trajs.append(pred_traj)
-            hits_trajs.append(data["past_traj_original_scale"])
-            hist_cond_cue.append(data["hist_cond_cue"])
-            fut_cond_cue.append(data["fut_cond_cue"])
-            fut_trajs.append(data['fut_traj'])
+            if save_trajs:
+                pred_trajs.append(pred_traj.detach().cpu())
+                hits_trajs.append(data["past_traj_original_scale"].detach().cpu())
+                if "hist_cond_cue" in data:
+                    hist_cond_cue.append(data["hist_cond_cue"].detach().cpu())
+                if "fut_cond_cue" in data:
+                    fut_cond_cue.append(data["fut_cond_cue"].detach().cpu())
+                fut_trajs.append(data['fut_traj'].detach().cpu())
 
             # 没还原对比没还原
             fut_traj = rearrange(data['fut_traj'], 'b a f d -> (b a) f d')               # [B, A, T, F] -> [B * A, T, F]
             fut_traj_gt = fut_traj.unsqueeze(1).repeat(1, self.cfg.denoising_head_preds, 1, 1)          # [B * A, K, T, F]
+            last_fut_traj_gt = fut_traj_gt
             distances = (fut_traj_gt - pred_traj).norm(p=2, dim=-1)                                     # [B * A, K, T]
             distances_t = (pred_traj_t - fut_traj_gt.unsqueeze(1)).norm(p=2, dim=-1)                    # [B * A, S, K, T]
             
@@ -698,6 +745,10 @@ class Trainer(object):
                 self.save_latent_states(t_seq_ls, y_t_seq_ls, y_pred_data_ls, x_data_ls, pred_score_ls, save_name)
                 
                 t_seq_ls, y_t_seq_ls, y_pred_data_ls, x_data_ls, pred_score_ls = [], [], [], [], []
+
+            del data, pred_traj, pred_traj_t, t_seq, y_t_seq, pred_score, distances, distances_t, fut_traj, fut_traj_gt
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
                 
         end.record()
         torch.cuda.synchronize()
@@ -749,7 +800,6 @@ class Trainer(object):
             pred_trajs_np = []
             for item in pred_trajs:
                 item = rearrange(item, '(b a) k f d -> b k a f d', a=self.cfg.agents)  # [B, K, A, F, D]
-                item = item.cpu()
                 item = unnormalize_mean_std(item, self.cfg.stats["fut_mean"], self.cfg.stats["fut_std"],0)  # [B, K, A, T, D]
                 item = item.detach().numpy()
                 pred_trajs_np.append(item)
@@ -759,29 +809,22 @@ class Trainer(object):
             print("pred shape = {}".format(pred_trajs_np.shape))
             np.save("/root/CogFlow/visualize/trajs/pred_trajs.npy", pred_trajs_np)
 
-            hits_trajs = [item.cpu().detach().numpy() for item in hits_trajs]
-            # print(hits_trajs[0].shape)
-            arr = np.concatenate(hits_trajs, axis=0)  # 形状变为 (N, T, 2)
+            arr = np.concatenate([item.numpy() for item in hits_trajs], axis=0)  # 形状变为 (N, T, 2)
             # print(arr.shape)
             np.save("/root/CogFlow/visualize/trajs/hist_trajs.npy", arr)
 
-            hist_cond_cue = [item.cpu().detach().numpy() for item in hist_cond_cue]
-            # print(cue_trajs[0].shape)
-            arr = np.concatenate(hist_cond_cue, axis=0)  # 形状变为 (N, T, 2)
-            # print(arr.shape)
-            np.save("/root/CogFlow/visualize/trajs/hist_cue_trajs.npy", arr)
+            if len(hist_cond_cue) > 0:
+                arr = np.concatenate([item.numpy() for item in hist_cond_cue], axis=0)  # 形状变为 (N, T, 2)
+                np.save("/root/CogFlow/visualize/trajs/hist_cue_trajs.npy", arr)
 
-            fut_cond_cue = [item.cpu().detach().numpy() for item in fut_cond_cue]
-            # print(cue_trajs[0].shape)
-            arr = np.concatenate(fut_cond_cue, axis=0)  # 形状变为 (N, T, 2)
-            # print(arr.shape)
-            np.save("/root/CogFlow/visualize/trajs/fut_cue_trajs.npy", arr)
+            if len(fut_cond_cue) > 0:
+                arr = np.concatenate([item.numpy() for item in fut_cond_cue], axis=0)  # 形状变为 (N, T, 2)
+                np.save("/root/CogFlow/visualize/trajs/fut_cue_trajs.npy", arr)
 
             # fut_trajs = [item.cpu().detach().numpy() for item in fut_gt_trajs]
             fut_trajs_np = []
             for item in fut_trajs:
                 # item = rearrange(item, '(b a) f d -> b a f d', a=self.cfg.agents)  # [B, K, A, F, D]
-                item = item.cpu()
                 # print(self.cfg.stats["fut_mean"], self.cfg.stats["fut_std"])
                 item = unnormalize_mean_std(item, self.cfg.stats["fut_mean"], self.cfg.stats["fut_std"],0)  # [B, K, A, T, D]
                 item = item.detach().numpy()
@@ -798,7 +841,11 @@ class Trainer(object):
                 compress = True
             )
 
-        return fut_traj_gt, performance, num_trajs
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        return last_fut_traj_gt, performance, num_trajs
     
 
 from trainer.trainer_registry import register_trainer
@@ -811,6 +858,26 @@ def build_cogflow_fm_trainer(cfg, model, train_loader, val_loader, tb_log, logge
         tb_log=tb_log, logger=logger,
         gradient_accumulate_every=1, ema_decay = 0.995, ema_update_every = 1,
     ) 
+
+
+@register_trainer("forecast")
+def build_forecast_trainer(cfg, model, train_loader, val_loader, tb_log, logger):
+    return Trainer(
+        cfg, model,
+        train_loader, val_loader,
+        tb_log=tb_log, logger=logger,
+        gradient_accumulate_every=1, ema_decay=0.995, ema_update_every=1,
+    )
+
+
+@register_trainer("latent_ar")
+def build_latent_ar_trainer(cfg, model, train_loader, val_loader, tb_log, logger):
+    return build_forecast_trainer(cfg, model, train_loader, val_loader, tb_log, logger)
+
+
+@register_trainer("rssm")
+def build_rssm_trainer(cfg, model, train_loader, val_loader, tb_log, logger):
+    return build_forecast_trainer(cfg, model, train_loader, val_loader, tb_log, logger)
          
     
     @torch.no_grad()
@@ -1220,4 +1287,3 @@ def build_cogflow_fm_trainer(cfg, model, train_loader, val_loader, tb_log, logge
         }
         self.logger.info(f"[ClassTol] Done. total_events = {total_events}")
         return results
-

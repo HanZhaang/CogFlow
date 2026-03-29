@@ -72,10 +72,10 @@ class MTRDecoder(nn.Module):
 
             # K-to-K self-attention
             # print("cur_query shape 1 = {}".format(cur_query.shape))
-            if len(query_token.shape) == 5:
-                cur_query = rearrange(query_token, 'b k a t d -> (b a t) k d')
+            if len(cur_query.shape) == 5:
+                cur_query = rearrange(cur_query, 'b k a t d -> (b a t) k d')
             else:
-                cur_query = rearrange(query_token, 'b k a d -> (b a) k d')
+                cur_query = rearrange(cur_query, 'b k a d -> (b a) k d')
             cur_query = self.self_attn_K[i](cur_query)
 
             # A-to-A self-attention

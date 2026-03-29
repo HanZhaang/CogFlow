@@ -4,9 +4,11 @@ import numpy as np
 import pickle
 import glob
 from torch.utils.data import Dataset
+from torch.utils.data import DataLoader
 from utils.normalization import normalize_min_max, unnormalize_min_max, normalize_sqrt, unnormalize_sqrt
 import torch
 from utils.utils import rotate_trajs_x_direction
+from data.dataset_registry import register_dataset
 
 
 def seq_collate_nba(batch):
@@ -231,4 +233,51 @@ class NBADatasetMinMax(Dataset):
                     self.fut_traj_vel[index]
                 ]
         return out
+
+
+@register_dataset("nba_dataset")
+def build_nba_dataloader(cfg, args):
+    train_dset = NBADatasetMinMax(
+        data_dir=cfg.data_dir,
+        obs_len=cfg.past_frames,
+        pred_len=cfg.future_frames,
+        training=True,
+        num_scenes=cfg.n_train,
+        overfit=cfg.get('overfit', False),
+        cfg=cfg,
+        rotate=cfg.get('rotate', False),
+        data_norm=cfg.data_norm,
+    )
+
+    train_loader = DataLoader(
+        train_dset,
+        batch_size=cfg.train_batch_size,
+        shuffle=False,
+        num_workers=cfg.get('num_workers', 4),
+        collate_fn=seq_collate_nba,
+        pin_memory=True,
+    )
+
+    test_dset = NBADatasetMinMax(
+        data_dir=cfg.data_dir,
+        obs_len=cfg.past_frames,
+        pred_len=cfg.future_frames,
+        training=False,
+        overfit=cfg.get('overfit', False),
+        test_scenes=cfg.n_test,
+        cfg=cfg,
+        rotate=cfg.get('rotate', False),
+        data_norm=cfg.data_norm,
+    )
+
+    test_loader = DataLoader(
+        test_dset,
+        batch_size=cfg.test_batch_size,
+        shuffle=False,
+        num_workers=cfg.get('num_workers', 4),
+        collate_fn=seq_collate_nba,
+        pin_memory=True,
+    )
+
+    return train_loader, test_loader
         

@@ -26,9 +26,7 @@ def get_model_builder(name: str) -> Callable[..., Any]:
 
 
 def list_registered_models() -> dict:
-    return {
-        sorted(_BACKBONE_REGISTRY.keys())
-    }
+    return {"models": sorted(_MODEL_REGISTRY.keys())}
 
 
 def build_network(cfg, args, logger):
@@ -39,9 +37,18 @@ def build_network(cfg, args, logger):
       - cfg.model_name: backbone registry name (e.g., "motion_transformer")
       - cfg.denoising_method: denoiser registry name (e.g., "fm")
     """
-    model_name = getattr(cfg.MODEL, "NAME", None)
+    import models  # noqa: F401
+
+    method_cfg = getattr(cfg, "METHOD", None)
+    model_name = None
+    if method_cfg is not None:
+        model_name = getattr(method_cfg, "NAME", None)
     if model_name is None:
-        raise ValueError("cfg.MODEL.NAME is required (e.g., 'Cogflow').")
+        model_name = getattr(cfg, "method_name", None)
+    if model_name is None:
+        model_name = getattr(cfg.MODEL, "NAME", None)
+    if model_name is None:
+        raise ValueError("cfg.METHOD.NAME or cfg.MODEL.NAME is required.")
 
     model_builder = get_model_builder(model_name)
     denoiser = model_builder(cfg=cfg, args=args, logger=logger)

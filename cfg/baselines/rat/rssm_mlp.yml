@@ -1,0 +1,107 @@
+# ------------------- General Options -------------------------
+description                  : RSSM with MLP Decoder
+results_root_dir             : results_rat
+dataset                      : rat
+dataset_name                 : rat_dataset
+
+# ------------------- Dataset -------------------------
+num_workers                  : 4
+past_frames                  : 30
+future_frames                : 60
+agents                       : 8
+dt                           : 0.033
+checkpt_freq                 : 10
+data_dir                     : './data/rat'
+
+overfit                      : False
+n_train                      : 4144
+n_test                       : 1184
+rotate                       : False
+data_norm                    : 'min_max'
+
+# ---------------- checkpoint save ----------------
+max_num_ckpts                : 5
+load_pretrained              : False
+ckpt_path                    : null
+
+# ---------------- pub hyper para ----------------
+fix_random_seed              : True
+seed                         : 42
+init_lr                      : 0.001
+
+# ---------------- baseline routing ----------------
+method_name                  : rssm
+denoising_method             : rssm
+trainer_name                 : forecast
+decoder_name                 : mlp
+
+METHOD:
+  NAME: rssm
+  DECODER: mlp
+  TRAINER: forecast
+
+RSSM_KL_BETA                 : 0.1
+
+CONSTRAINTS:
+  ENABLED: False
+  ITEMS: []
+
+# -------------------- Logger config -----------------------------
+notes                        : 'RSSM-MLP'
+
+# ---------------------------- Configurations for model ----------------------------
+MODEL:
+    NAME: "rssm"
+    AGENT_DIM: 2
+    NUM_PROPOSED_QUERY: 20
+    MODEL_OUT_DIM: 120
+    REGRESSION_MLPS: [128, 256, 64, 2]
+    CLASSIFICATION_MLPS: [128, 128, 1]
+
+    USE_PE_QUERY: True
+    USE_PE_AGENT: True
+    USE_PRE_NORM: False
+
+    COND_D_CUE: 7
+    COND_D_HIST: 7
+    COG_D_Z: 64
+    RSSM_STOCH_DIM: 64
+    RSSM_DET_DIM: 128
+    RSSM_OBS_DIM: 64
+    RSSM_DECODER_LATENT_DIM: 64
+    DECODER_TIME_CHUNK: 0
+
+    CONTEXT_ENCODER:
+        NAME: MTREncoder
+        DATA_TYPE: rat
+        NUM_OF_ATTN_NEIGHBORS: 8
+        NUM_INPUT_CONTEXT: 6
+        NUM_CHANNEL_IN_MLP_AGENT: 256
+        NUM_LAYER_IN_MLP_AGENT: 3
+        D_MODEL: 128
+        NUM_ATTN_LAYERS: 4
+        NUM_ATTN_HEAD: 8
+        DROPOUT_OF_ATTN: 0.1
+
+    MOTION_DECODER:
+        NAME: MTRDecoder
+        D_MODEL: 128
+        NUM_DECODER_BLOCKS: 4
+        NUM_ATTN_HEAD: 8
+        DROPOUT_OF_ATTN: 0.1
+
+denoising_head_preds         : 20
+k_preds                      : 20
+
+# ------------------------------- Optimizer Parameters ---------------------------------
+train_batch_size             : 16
+test_batch_size              : 16
+
+OPTIMIZATION:
+    NUM_EPOCHS: 600
+    OPTIMIZER: AdamW
+    LR: 0.001
+    WEIGHT_DECAY: 0.05
+    SCHEDULER: cosineAnnealingLRwithWarmup
+    LR_CLIP: 0.000001
+    GRAD_NORM_CLIP: 1.0

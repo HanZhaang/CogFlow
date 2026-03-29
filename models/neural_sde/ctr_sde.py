@@ -316,7 +316,7 @@ class ControlledSSLSDE(nn.Module):
         self.B_lvl = nn.Parameter(torch.zeros(num_regimes, z_dim, stim_dim))
         self.B_evt = nn.Parameter(torch.zeros(num_regimes, z_dim, stim_dim))
 
-        self.cmd_encoder = CommandEncoder(dataset_type=dataset_type)
+        self.cmd_encoder = CommandEncoder(out_dim=stim_dim, dataset_type=dataset_type)
         # 噪声强度 log_sigma: [S, z_dim]，Sigma_i = diag(exp(log_sigma_i))
         self.log_sigma = nn.Parameter(torch.zeros(num_regimes, z_dim))
 
@@ -547,7 +547,9 @@ def simulate_sde_paths(
     z0: torch.Tensor,
     u_seq: torch.Tensor,
     dt: float,
-) -> torch.Tensor:
+    u_seq_encoded: torch.Tensor | None = None,
+    return_terms: bool = False,
+) -> torch.Tensor | dict[str, torch.Tensor]:
     """
     使用 Euler–Maruyama 方法前向仿真 SDE，生成隐变量轨迹 z_seq。
 
@@ -568,18 +570,20 @@ def simulate_sde_paths(
     _, z_dim = z0.shape
 
     z = z0
+    states = []
     zs = []
     drifts = []
     sigmas = []
     
     sqrt_dt = math.sqrt(dt)
-    u_seq_emb = sde.cmd_encoder(u_seq)
+    if u_seq_encoded is None:
+        u_seq_encoded = sde.cmd_encoder(u_seq)
 
     for t in range(T):
-        u_t = u_seq[:, t, :]  # [B, stim_dim]
-        u_prev = u_seq[:, t-1, :] if t > 0 else u_t  # t=0 => du=0
-        drift = sde.drift(z, u_t)      # [B, z_dim]
-        # drift = sde.drift(z, u_t, dt=dt, u_prev=u_prev, w_level=1.0, w_event=1.0, clip_udot=10.0)
+        u_t = u_seq_encoded[:, t, :]  # [B, stim_dim]
+        u_prev = u_seq_encoded[:, t - 1, :] if t > 0 else u_t  # t=0 => du=0
+        states.append(z)
+        drift = sde.drift(z, u_t, dt=dt, u_prev=u_prev)      # [B, z_dim]
         sigma = sde.diffusion(z)       # [B, z_dim]
         noise = torch.randn(B, z_dim, device=device, dtype=dtype)  # dW_t ~ N(0, dt)
         z = z + drift * dt + sigma * sqrt_dt * noise
@@ -589,9 +593,17 @@ def simulate_sde_paths(
         sigmas.append(sigma)
         
     z_seq = torch.stack(zs, dim=1)  # [B, T, z_dim]
-    drift_seq = torch.stack(drifts, dim=1)  # [B, T, z_dim]
-    sigma_seq = torch.stack(sigmas, dim=1)  # [B, T, z_dim]
-    return z_seq
+    if not return_terms:
+        return z_seq
+
+    return {
+        "state_seq": torch.stack(states, dim=1),  # [B, T, z_dim], aligned with drift/sigma
+        "z_seq": z_seq,  # [B, T, z_dim], post-step rollout for decoder conditioning
+        "drift_seq": torch.stack(drifts, dim=1),  # [B, T, z_dim]
+        "sigma_seq": torch.stack(sigmas, dim=1),  # [B, T, z_dim]
+        "u_seq": u_seq_encoded,
+        "u_seq_raw": u_seq,
+    }
     
 
 if __name__ == "__main__":

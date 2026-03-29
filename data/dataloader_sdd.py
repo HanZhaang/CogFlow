@@ -8,11 +8,13 @@ import torch.nn.functional as F
 import numpy as np
 import torch
 from torch.utils.data import Dataset
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 import pickle
 
 from utils.normalization import normalize_min_max
 from torch.nn.utils.rnn import pad_sequence
+from data.dataset_registry import register_dataset
 
 
 def rotate_traj(past_rel, future_rel, past_abs, rotate_time_frame=0):
@@ -258,3 +260,40 @@ class SDDDataset(Dataset):
                 fut_traj_vel,
             ]
         return out
+
+
+@register_dataset("sdd_dataset")
+def build_sdd_dataloader(cfg, args):
+    train_dset = SDDDataset(
+        cfg=cfg,
+        training=True,
+        data_dir=cfg.data_dir,
+        rotate_time_frame=cfg.get('rotate_time_frame', 0),
+    )
+
+    train_loader = DataLoader(
+        train_dset,
+        batch_size=cfg.train_batch_size,
+        shuffle=False,
+        num_workers=cfg.get('num_workers', 4),
+        collate_fn=seq_collate_sdd,
+        pin_memory=True,
+    )
+
+    test_dset = SDDDataset(
+        cfg=cfg,
+        training=False,
+        data_dir=cfg.data_dir,
+        rotate_time_frame=cfg.get('rotate_time_frame', 0),
+    )
+
+    test_loader = DataLoader(
+        test_dset,
+        batch_size=cfg.test_batch_size,
+        shuffle=False,
+        num_workers=cfg.get('num_workers', 4),
+        collate_fn=seq_collate_sdd,
+        pin_memory=True,
+    )
+
+    return train_loader, test_loader

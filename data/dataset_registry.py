@@ -40,5 +40,22 @@ def build_data_loader(cfg, args):
 
     cfg.dataset_name must be specified.
     """
-    builder = get_dataset_builder(cfg.dataset_name)
+    import data  # noqa: F401
+
+    dataset_name = getattr(cfg, "dataset_name", None)
+    if dataset_name is None:
+        dataset = getattr(cfg, "dataset", None)
+        dataset_name_map = {
+            "rat": "rat_dataset",
+            "babel": "babel_dataset",
+            "nba": "nba_dataset",
+            "eth_ucy": "eth_dataset",
+            "sdd": "sdd_dataset",
+        }
+        dataset_name = dataset_name_map.get(dataset)
+        if dataset_name is None:
+            raise ValueError("cfg.dataset_name or cfg.dataset is required.")
+        cfg.dataset_name = dataset_name
+
+    builder = get_dataset_builder(dataset_name)
     return builder(cfg, args)

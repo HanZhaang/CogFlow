@@ -21,7 +21,7 @@ class ETHMotionTransformer(nn.Module):
 
         assert not use_pre_norm, "Pre-norm is not supported in this model"
 
-        self.context_encoder = build_context_encoder(self.model_cfg.CONTEXT_ENCODER, use_pre_norm)
+        self.context_encoder = build_context_encoder(self.model_cfg.CONTEXT_ENCODER, use_pre_norm, config.device)
 
         ### serves the purpose of positional encoding
         self.motion_query_embedding = nn.Embedding(self.model_cfg.NUM_PROPOSED_QUERY, self.dim)
@@ -81,6 +81,11 @@ class ETHMotionTransformer(nn.Module):
         params_other = params_total - params_encoder - params_decoder
         logger.info("Total parameters: {:,}, Encoder: {:,}, Decoder: {:,}, Other: {:,}".format(params_total, params_encoder, params_decoder, params_other))
 
+    def build_static_cache(self, x_data):
+        return {
+            "encoder_out": self.context_encoder(x_data['past_traj_original_scale']),
+        }
+
     def forward(self, y, time, x_data):
         """
         y: noisy vector
@@ -94,7 +99,8 @@ class ETHMotionTransformer(nn.Module):
         B, K, A, _ = y.shape
 
         ### context encoder
-        encoder_out = self.context_encoder(x_data['past_traj_original_scale'])  # [B, A, D]
+        static_cache = x_data.get("_static_cache")
+        encoder_out = static_cache["encoder_out"] if static_cache is not None else self.context_encoder(x_data['past_traj_original_scale'])  # [B, A, D]
         encoder_out_batch = repeat(encoder_out, 'b a d -> b k a d', k=K, a=A) 	# [B, K, A, D]
 
         ### init embeddings
@@ -157,7 +163,7 @@ class ETHIMLETransformer(nn.Module):
 
         assert not use_pre_norm, "Pre-norm is not supported in this model"
 
-        self.context_encoder = build_context_encoder(self.model_cfg.CONTEXT_ENCODER, use_pre_norm)
+        self.context_encoder = build_context_encoder(self.model_cfg.CONTEXT_ENCODER, use_pre_norm, config.device)
 
         ### serves the purpose of positional encoding
         if self.objective == 'set':
