@@ -325,7 +325,7 @@ class FlowMatcher(nn.Module):
         return y_next, model_preds.pred_data, model_preds
 
     @torch.no_grad()
-    def sample(self, x_data, num_trajs, return_all_states=False):
+    def sample(self, x_data, num_trajs, return_all_states=False, collect_trace=True):
         """
         Sample from the model.
         """
@@ -339,7 +339,7 @@ class FlowMatcher(nn.Module):
         y_t = y_t[:, :1].expand(-1, self.cfg.denoising_head_preds, -1, -1)
 
         # sampling loop
-        y_data_at_t_ls = []
+        y_data_at_t_ls = [] if collect_trace else None
         t_ls = []
         y_t_ls = []
 
@@ -376,13 +376,17 @@ class FlowMatcher(nn.Module):
             raise NotImplementedError(f"Unknown solver: {self.solver}")
 
         # define the time steps to print
-        num_prints = 10
-        if len(t_ls) > num_prints:
-            print_times = t_ls[::self.sampling_steps // num_prints]
-            if t_ls[-1] not in print_times:
-                print_times.append(t_ls[-1])
+        log_sampling_progress = bool(self.cfg.get("LOG_SAMPLING_PROGRESS", False))
+        if log_sampling_progress:
+            num_prints = 10
+            if len(t_ls) > num_prints:
+                print_times = t_ls[::self.sampling_steps // num_prints]
+                if t_ls[-1] not in print_times:
+                    print_times.append(t_ls[-1])
+            else:
+                print_times = t_ls
         else:
-            print_times = t_ls
+            print_times = []
 
         static_cache = None
         if hasattr(self.model, "build_static_cache"):
@@ -398,14 +402,21 @@ class FlowMatcher(nn.Module):
                 flag_print,
                 static_cache=static_cache,
             )
-            y_data_at_t_ls.append(y_data)
+            if collect_trace:
+                y_data_at_t_ls.append(y_data)
             if return_all_states:
                 y_t_ls.append(y_t)
 
-        y_data_at_t_ls = torch.stack(y_data_at_t_ls, dim=1)     # [B, S, K, A, F * D]
-        t_ls = torch.tensor(t_ls, device=self.device)   # [S]
+        if collect_trace:
+            y_data_at_t_ls = torch.stack(y_data_at_t_ls, dim=1)     # [B, S, K, A, F * D]
+            t_ls = torch.tensor(t_ls, device=self.device)   # [S]
+        else:
+            y_data_at_t_ls = None
+            t_ls = None
         if return_all_states:
             y_t_ls = torch.stack(y_t_ls, dim=1)  # [B, S, K, A, F * D]
+        else:
+            y_t_ls = None
 
         return y_t, y_data_at_t_ls, t_ls, y_t_ls, model_preds.pred_score
 
@@ -769,7 +780,10 @@ class FlowMatcher(nn.Module):
 
     def predict(self, batch, num_samples: int, return_trace: bool = False):
         samples, pred_traj_at_t, t_seq, y_t_seq, pred_score = self.sample(
-            batch, num_trajs=num_samples, return_all_states=return_trace
+            batch,
+            num_trajs=num_samples,
+            return_all_states=return_trace,
+            collect_trace=return_trace,
         )
         from models.forecast import PredictionOutput
 
