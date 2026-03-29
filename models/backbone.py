@@ -22,6 +22,7 @@ class MotionTransformer(nn.Module):
         self.logger = logger
         use_pre_norm = self.model_cfg.get('USE_PRE_NORM', False)
         self.ablation_mode = self.config.CNSDE
+        self.time_chunk_size = int(self.model_cfg.get('DECODER_TIME_CHUNK', 0))
         assert not use_pre_norm, "Pre-norm is not supported in this model"
         self.T_f = self.config.get('future_frames', 0)
         self.dt = self.config.get('dt', 0)
@@ -215,33 +216,93 @@ class MotionTransformer(nn.Module):
         else:
             pass
         return y_emb
+
+    def _decode_m2_with_time_chunk(
+        self,
+        emb_fusion: torch.Tensor,
+        gamma: torch.Tensor,
+        beta: torch.Tensor,
+        k_pe: torch.Tensor,
+        a_pe: torch.Tensor,
+        t_emb: torch.Tensor,
+    ) -> torch.Tensor:
+        chunk_size = self.time_chunk_size
+        if chunk_size <= 0 or self.T_f <= chunk_size:
+            query_token = self.post_pe_cat_mlp(
+                self.apply_PE(emb_fusion.unsqueeze(3) * (1 + gamma) + beta, k_pe, a_pe)
+            )
+            return self.reg_head(self.motion_decoder(query_token, t_emb))
+
+        outputs = []
+        base_fusion = emb_fusion.unsqueeze(3)
+        for start in range(0, self.T_f, chunk_size):
+            end = min(start + chunk_size, self.T_f)
+            fused_chunk = base_fusion * (1 + gamma[:, :, :, start:end]) + beta[:, :, :, start:end]
+            query_chunk = self.post_pe_cat_mlp(self.apply_PE(fused_chunk, k_pe, a_pe))
+            outputs.append(self.reg_head(self.motion_decoder(query_chunk, t_emb)))
+        return torch.cat(outputs, dim=3)
     
     def get_z_rollout(self, x_data, return_terms: bool = False):
-        past_traj = x_data["past_traj"]
-        hist_stim = x_data["hist_cond_cue"]
-        # 2.1) 编码初始隐变量 z0
-        z0 = self.z0_encoder(past_traj, hist_stim)   # [B, z_dim]
+        z0 = None
+        u_seq = None
+        u_seq_encoded = None
+        if "_static_cache" in x_data:
+            static_cache = x_data["_static_cache"]
+            z0 = static_cache.get("z0")
+            u_seq = static_cache.get("u_seq")
+            u_seq_encoded = static_cache.get("u_seq_encoded")
 
-        # 2.2) 构造未来控制序列 u_seq 并仿真 SDE 得到 z_seq
-        u_seq = self._build_future_control_seq(
-            x_data=x_data,
-            B=z0.shape[0],
-            device=z0.device,
-            dtype=z0.dtype,
-        )                                          # [B, T_f, stim_dim]
+        if z0 is None or u_seq is None:
+            past_traj = x_data["past_traj"]
+            hist_stim = x_data["hist_cond_cue"]
+            z0 = self.z0_encoder(past_traj, hist_stim)   # [B, z_dim]
+            u_seq = self._build_future_control_seq(
+                x_data=x_data,
+                B=z0.shape[0],
+                device=z0.device,
+                dtype=z0.dtype,
+            )                                          # [B, T_f, stim_dim]
+
+        if u_seq_encoded is None:
+            u_seq_encoded = self.neural_sde.cmd_encoder(u_seq)
 
         rollout_out = simulate_sde_paths(
             sde=self.neural_sde,
             z0=z0,
             u_seq=u_seq,
             dt=self.dt,
+            u_seq_encoded=u_seq_encoded,
             return_terms=return_terms,
         )
         if return_terms:
             rollout_out["z0"] = z0
-            rollout_out["u_seq"] = u_seq
             return rollout_out
         return rollout_out, u_seq
+
+    def build_static_cache(self, x_data):
+        cache = {
+            "encoder_out": self.context_encoder(x_data['past_traj_original_scale']),
+        }
+
+        if self.ablation_mode == "m1":
+            cond_flow, z = self.z_encoder(x_data)
+            cache["cond_flow"] = cond_flow
+            cache["z"] = z
+        elif self.ablation_mode == "m2":
+            past_traj = x_data["past_traj"]
+            hist_stim = x_data["hist_cond_cue"]
+            z0 = self.z0_encoder(past_traj, hist_stim)
+            u_seq = self._build_future_control_seq(
+                x_data=x_data,
+                B=z0.shape[0],
+                device=z0.device,
+                dtype=z0.dtype,
+            )
+            cache["z0"] = z0
+            cache["u_seq"] = u_seq
+            cache["u_seq_encoded"] = self.neural_sde.cmd_encoder(u_seq)
+
+        return cache
         
     def forward(self, y, time, x_data):
         '''
@@ -268,9 +329,10 @@ class MotionTransformer(nn.Module):
         B, K, A, _ = y.shape
 
         # （1）上下文编码：根据历史（及邻居）得到每个 agent 的上下文向量 [B, A, D]
-        encoder_out = self.context_encoder(x_data['past_traj_original_scale'])  # [B, A, D]
+        static_cache = x_data.get("_static_cache")
+        encoder_out = static_cache["encoder_out"] if static_cache is not None else self.context_encoder(x_data['past_traj_original_scale'])  # [B, A, D]
         # 扩到 [B, K, A, D] 与 proposal 维对齐
-        encoder_out_batch = repeat(encoder_out, 'b a d -> b k a d', k=K, a=A) 	# [B, K, A, D]
+        encoder_out_batch = encoder_out[:, None, :, :].expand(B, K, A, -1) 	# [B, K, A, D]
         # encoder_out_batch = encoder_out_batch.unsqueeze(3).repeat(1, 1, 1, self.T_f, 1)
         # print("encoder_out_batch shape = {}".format(encoder_out_batch.shape))
 
@@ -278,9 +340,12 @@ class MotionTransformer(nn.Module):
         y_emb = self.noisy_y_mlp(y)  	# [B, K, A, D]
 
         if self.ablation_mode == "m1":
-            cond_flow, z = self.z_encoder(x_data)  # Stage A
+            if static_cache is not None and "cond_flow" in static_cache and "z" in static_cache:
+                cond_flow, z = static_cache["cond_flow"], static_cache["z"]
+            else:
+                cond_flow, z = self.z_encoder(x_data)  # Stage A
             cond_flow = self.cond_proj(cond_flow)
-            cond_bka = repeat(cond_flow, 'b d -> b k a d', k=K, a=A)
+            cond_bka = cond_flow[:, None, None, :].expand(B, K, A, -1)
             z_feat = self.z_proj(z)
             z_bka = z_feat[:, None, None, :].expand(B, K, A, -1)      # [B,K,A,d_model]
             gamma, beta = self.cond_film_gamma(cond_bka), self.cond_film_beta(cond_bka)
@@ -314,14 +379,14 @@ class MotionTransformer(nn.Module):
             time = time * 1000.0  # flow matching time upscaling
 
         t_emb = self.time_mlp(time) 	# [B, D]
-        t_emb_batch = repeat(t_emb, 'b d -> b k a d', b=B, k=K, a=A) # [B, K, A, D]  # 与 (K,A) 对齐
+        t_emb_batch = t_emb[:, None, None, :].expand(B, K, A, -1) # [B, K, A, D]  # 与 (K,A) 对齐
 
         # （4）构造 K、A 的“索引型位置编码”并扩展到 batch
         k_pe = self.motion_query_embedding(torch.arange(self.model_cfg.NUM_PROPOSED_QUERY, device=device))	# [K, D]
-        k_pe_batch = repeat(k_pe, 'k d -> b k a d', b=B, a=A)	# [B, K, A, D]
+        k_pe_batch = k_pe[None, :, None, :]	# [1, K, 1, D]
 
         a_pe = self.agent_order_embedding(torch.arange(self.model_cfg.CONTEXT_ENCODER.NUM_OF_ATTN_NEIGHBORS, device=device))  # [A, D]
-        a_pe_batch = repeat(a_pe, 'a d -> b k a d', b=B, k=K)	# [B, K, A, D]
+        a_pe_batch = a_pe[None, None, :, :]	# [1, 1, A, D]
 
 
         # （5）对 y_emb 分别沿 K、沿 A 做自注意，增强 proposal间/agent间的信息交互
@@ -355,29 +420,23 @@ class MotionTransformer(nn.Module):
         
         # # 11-24 尝试在此处融合，效果显著，出于对比考虑修改
         if self.ablation_mode == "m2":
-            emb_fusion = emb_fusion.unsqueeze(3).repeat(1, 1, 1, self.T_f, 1) # [B, K, A, T, D]
-            emb_fusion = emb_fusion * (1 + gamma) + beta        # [B, K, A, T, D]
-            a_pe_batch = a_pe_batch.unsqueeze(3).repeat(1, 1, 1, self.T_f, 1)
-            k_pe_batch = k_pe_batch.unsqueeze(3).repeat(1, 1, 1, self.T_f, 1)
-            t_emb_batch = t_emb_batch.unsqueeze(3).repeat(1, 1, 1, self.T_f, 1)
-
-        
-        query_token = self.post_pe_cat_mlp(self.apply_PE(emb_fusion, k_pe_batch, a_pe_batch)) 								# [B, K, A, D]
-        # print("query token shape = {}".format(query_token.shape))
-        # if self.ablation_mode == "m2":
-        # query_token = rearrange(query_token, 'b k a t d -> b (k a t) d')
-        readout_token = self.motion_decoder(query_token, t_emb)													# [B, K, A, D]
-        # print("readout token shape = {}".format(readout_token.shape))
-
-        # # 11-25 尝试在后期融合z (放弃)
-        # readout_token = readout_token.unsqueeze(3).repeat(1, 1, 1, self.T_f, 1) # [B, K, A, T, D]
-        # readout_token = readout_token * (1.0 + gamma) + beta  # [B,K,A,T_f,D]
-
-        # （8）读出：回归分支输出 T*D，分类分支输出 [B,K,A] 的打分
-        denoiser_x = self.reg_head(readout_token)  										# [B, K, A, F * D]
-        # print("denoiser_x shape = {}".format(denoiser_x.shape))
-        if self.ablation_mode == "m2":
+            k_pe_batch = k_pe_batch.unsqueeze(3)  # [1, K, 1, 1, D]
+            a_pe_batch = a_pe_batch.unsqueeze(3)  # [1, 1, A, 1, D]
+            denoiser_x = self._decode_m2_with_time_chunk(
+                emb_fusion=emb_fusion,
+                gamma=gamma,
+                beta=beta,
+                k_pe=k_pe_batch,
+                a_pe=a_pe_batch,
+                t_emb=t_emb,
+            )
             denoiser_x = rearrange(denoiser_x, 'b k a t d -> b k a (t d)')
+        else:
+            query_token = self.post_pe_cat_mlp(self.apply_PE(emb_fusion, k_pe_batch, a_pe_batch)) 								# [B, K, A, D]
+            readout_token = self.motion_decoder(query_token, t_emb)													# [B, K, A, D]
+
+            # （8）读出：回归分支输出 T*D，分类分支输出 [B,K,A] 的打分
+            denoiser_x = self.reg_head(readout_token)  										# [B, K, A, F * D]
         # print("denoiser_x shape = {}".format(denoiser_x.shape))
 
         # denoiser_cls = self.cls_head(readout_token).squeeze(-1) 						# [B, K, A]

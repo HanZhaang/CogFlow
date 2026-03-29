@@ -257,13 +257,16 @@ class FlowMatcher(nn.Module):
 
         return t, x_t, u_t, target, l_weight
 
-    def model_predictions(self, y_t, x, t, flag_print):
+    def model_predictions(self, y_t, x, t, flag_print, static_cache=None):
         # if self.cfg.fm_in_scaling:
         y_t_in = y_t * pad_t_like_x(self.get_input_scaling(t), y_t)
         # else:
         #     y_t_in = y_t
 
         # model_out, pred_score = self.model(y_t_in, t, x_data = x)
+        if static_cache is not None:
+            x = dict(x)
+            x["_static_cache"] = static_cache
         if self._needs_rollout_aux():
             model_out, _ = self.model(y_t_in, t, x_data=x)
         else:
@@ -312,11 +315,11 @@ class FlowMatcher(nn.Module):
         return ModelPrediction(pred_vel, y_data_at_t, pred_score)
 
     @torch.inference_mode()
-    def bwd_sample_t(self, y_t: torch.tensor, t: int, dt: float, x_data: dict, flag_print: bool=False):
+    def bwd_sample_t(self, y_t: torch.tensor, t: int, dt: float, x_data: dict, flag_print: bool=False, static_cache=None):
         B, K, T, D = y_t.shape
 
         batched_t = torch.full((B,), t, device=self.device, dtype=torch.float)
-        model_preds = self.model_predictions(y_t, x_data, batched_t, flag_print)
+        model_preds = self.model_predictions(y_t, x_data, batched_t, flag_print, static_cache=static_cache)
 
         y_next = y_t + model_preds.pred_vel * dt
         return y_next, model_preds.pred_data, model_preds
@@ -381,9 +384,20 @@ class FlowMatcher(nn.Module):
         else:
             print_times = t_ls
 
+        static_cache = None
+        if hasattr(self.model, "build_static_cache"):
+            static_cache = self.model.build_static_cache(x_data)
+
         for idx_step, (cur_t, cur_dt) in enumerate(zip(t_ls, dt_ls)):
             flag_print = cur_t in print_times
-            y_t, y_data, model_preds = self.bwd_sample_t(y_t, cur_t, cur_dt, x_data, flag_print)
+            y_t, y_data, model_preds = self.bwd_sample_t(
+                y_t,
+                cur_t,
+                cur_dt,
+                x_data,
+                flag_print,
+                static_cache=static_cache,
+            )
             y_data_at_t_ls.append(y_data)
             if return_all_states:
                 y_t_ls.append(y_t)
