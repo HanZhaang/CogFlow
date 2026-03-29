@@ -797,6 +797,9 @@ class Trainer(object):
                 time+1, performance_joint['JADE_avg'][time]/num_trajs, time+1, performance_joint['JFDE_avg'][time]/num_trajs))
 
         if save_trajs:
+            traj_dump_dir = os.path.join(self.cfg.npz_dir, "trajs")
+            os.makedirs(traj_dump_dir, exist_ok=True)
+
             pred_trajs_np = []
             for item in pred_trajs:
                 item = rearrange(item, '(b a) k f d -> b k a f d', a=self.cfg.agents)  # [B, K, A, F, D]
@@ -807,19 +810,19 @@ class Trainer(object):
             # print(pred_trajs_np[0].shape)
             pred_trajs_np = np.concatenate(pred_trajs_np, axis=0)  # 形状变为 (N, T, 2)
             print("pred shape = {}".format(pred_trajs_np.shape))
-            np.save("/root/CogFlow/visualize/trajs/pred_trajs.npy", pred_trajs_np)
+            np.save(os.path.join(traj_dump_dir, "pred_trajs.npy"), pred_trajs_np)
 
             arr = np.concatenate([item.numpy() for item in hits_trajs], axis=0)  # 形状变为 (N, T, 2)
             # print(arr.shape)
-            np.save("/root/CogFlow/visualize/trajs/hist_trajs.npy", arr)
+            np.save(os.path.join(traj_dump_dir, "hist_trajs.npy"), arr)
 
             if len(hist_cond_cue) > 0:
                 arr = np.concatenate([item.numpy() for item in hist_cond_cue], axis=0)  # 形状变为 (N, T, 2)
-                np.save("/root/CogFlow/visualize/trajs/hist_cue_trajs.npy", arr)
+                np.save(os.path.join(traj_dump_dir, "hist_cue_trajs.npy"), arr)
 
             if len(fut_cond_cue) > 0:
                 arr = np.concatenate([item.numpy() for item in fut_cond_cue], axis=0)  # 形状变为 (N, T, 2)
-                np.save("/root/CogFlow/visualize/trajs/fut_cue_trajs.npy", arr)
+                np.save(os.path.join(traj_dump_dir, "fut_cue_trajs.npy"), arr)
 
             # fut_trajs = [item.cpu().detach().numpy() for item in fut_gt_trajs]
             fut_trajs_np = []
@@ -832,7 +835,8 @@ class Trainer(object):
 
             fut_trajs_np = np.concatenate(fut_trajs_np, axis=0)  # 形状变为 (N, T, 2)
             print("fut_trajs_np shape = {}".format(fut_trajs_np.shape))
-            np.save("/root/CogFlow/visualize/trajs/fut_gt_trajs.npy", fut_trajs_np)
+            np.save(os.path.join(traj_dump_dir, "fut_gt_trajs.npy"), fut_trajs_np)
+            self.logger.info(f"Saved trajectory dumps to {traj_dump_dir}")
             
             save_pred_fut(
                 save_path = os.path.join(self.cfg.npz_dir, self.cfg.dataset + "_" + self.cfg.MODEL.NAME + ".npz"),
