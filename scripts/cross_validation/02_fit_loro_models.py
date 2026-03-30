@@ -120,22 +120,31 @@ def build_windows_from_manifest(manifest_path: Path, seq_len: int, stride: int) 
 
 def materialize_split_dataset(split_path: Path, dataset_root: Path, past_frames: int, future_frames: int, stride: int) -> Dict[str, object]:
     seq_len = int(past_frames) + int(future_frames)
-    train_pose, train_cmd, train_meta = build_windows_from_manifest(split_path / "train_manifest.csv", seq_len=seq_len, stride=stride)
-    test_pose, test_cmd, test_meta = build_windows_from_manifest(split_path / "test_manifest.csv", seq_len=seq_len, stride=stride)
+    train_manifest = split_path / "train_manifest.csv"
+    val_manifest = split_path / "val_manifest.csv"
+    test_manifest = split_path / "test_manifest.csv"
+    if not train_manifest.exists() or not val_manifest.exists() or not test_manifest.exists():
+        raise FileNotFoundError(
+            f"split is missing train/val/test manifests: {split_path}. "
+            "Rerun 01_make_loro_splits.py to regenerate the held-out split."
+        )
+
+    train_pose, train_cmd, train_meta = build_windows_from_manifest(train_manifest, seq_len=seq_len, stride=stride)
+    val_pose, val_cmd, val_meta = build_windows_from_manifest(val_manifest, seq_len=seq_len, stride=stride)
 
     target_dir = ensure_dir(dataset_root / "rat_ver2_smooth_3060")
     train_pose_path = target_dir / "rat_pose_train.npy"
     train_cmd_path = target_dir / "rat_stim_train.npy"
-    test_pose_path = target_dir / "rat_pose_test.npy"
-    test_cmd_path = target_dir / "rat_stim_test.npy"
+    val_pose_path = target_dir / "rat_pose_test.npy"
+    val_cmd_path = target_dir / "rat_stim_test.npy"
 
     np.save(train_pose_path, train_pose)
     np.save(train_cmd_path, train_cmd)
-    np.save(test_pose_path, test_pose)
-    np.save(test_cmd_path, test_cmd)
+    np.save(val_pose_path, val_pose)
+    np.save(val_cmd_path, val_cmd)
 
     pd.DataFrame(train_meta).to_csv(dataset_root / "train_windows.csv", index=False)
-    pd.DataFrame(test_meta).to_csv(dataset_root / "test_windows.csv", index=False)
+    pd.DataFrame(val_meta).to_csv(dataset_root / "val_windows.csv", index=False)
 
     summary = {
         "split": split_path.name,
@@ -144,12 +153,15 @@ def materialize_split_dataset(split_path: Path, dataset_root: Path, past_frames:
         "past_frames": int(past_frames),
         "future_frames": int(future_frames),
         "train_windows": int(train_pose.shape[0]),
-        "test_windows": int(test_pose.shape[0]),
+        "val_windows": int(val_pose.shape[0]),
         "agents": int(train_pose.shape[2]),
         "train_pose_path": str(train_pose_path.resolve()),
         "train_cmd_path": str(train_cmd_path.resolve()),
-        "test_pose_path": str(test_pose_path.resolve()),
-        "test_cmd_path": str(test_cmd_path.resolve()),
+        "val_pose_path": str(val_pose_path.resolve()),
+        "val_cmd_path": str(val_cmd_path.resolve()),
+        "train_manifest": str(train_manifest.resolve()),
+        "val_manifest": str(val_manifest.resolve()),
+        "heldout_test_manifest": str(test_manifest.resolve()),
     }
     with (dataset_root / "dataset_summary.json").open("w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2, ensure_ascii=True)
@@ -277,7 +289,7 @@ def run_cogflow_train_for_split(split_path: Path, args: argparse.Namespace) -> D
         results_root_dir=results_root_dir,
         dataset_root=dataset_root,
         n_train=int(dataset_info["train_windows"]),
-        n_test=int(dataset_info["test_windows"]),
+        n_test=int(dataset_info["val_windows"]),
         train_batch_size=int(args.train_batch_size),
         test_batch_size=int(args.test_batch_size),
         num_workers=int(args.num_workers),
