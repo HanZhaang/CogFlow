@@ -33,6 +33,7 @@ def parse_config():
 	parser.add_argument('--method', type=str, choices=['cogflow', 'latent_ar', 'rssm'], help="Forecast method")
 	parser.add_argument('--variant', type=str, help="Method variant, e.g. gru or transformer")
 	parser.add_argument('--decoder', type=str, choices=['moflow_structured', 'mlp'], help="Decoder backend")
+	parser.add_argument('--action_fusion', type=str, choices=['none', 'cross_attention'], help="Action fusion backend")
 	parser.add_argument('--enable_dissipativity', action='store_true', help="Enable boundedness loss (legacy alias)")
 	parser.add_argument('--dissipativity_weight', type=float, default=None, help="Boundedness loss weight override (legacy alias)")
 
@@ -60,8 +61,22 @@ def apply_runtime_overrides(cfg, args):
 	method_cfg.NAME = method_name
 	method_cfg.VARIANT = args.variant or method_cfg.get('VARIANT', 'gru')
 	method_cfg.DECODER = args.decoder or method_cfg.get('DECODER', 'moflow_structured')
+	method_cfg.ACTION_FUSION = args.action_fusion or method_cfg.get('ACTION_FUSION', 'none')
 	method_cfg.TRAINER = method_cfg.get('TRAINER', 'forecast')
 	cfg.yml_dict['METHOD'] = method_cfg
+
+	action_fusion_cfg = cfg.MODEL.get('ACTION_FUSION', EasyDict())
+	if not isinstance(action_fusion_cfg, EasyDict):
+		action_fusion_cfg = EasyDict(action_fusion_cfg)
+	action_fusion_cfg.NAME = method_cfg.ACTION_FUSION
+	action_fusion_cfg.D_MODEL = int(action_fusion_cfg.get('D_MODEL', cfg.MODEL.CONTEXT_ENCODER.D_MODEL))
+	action_fusion_cfg.NUM_HEADS = int(action_fusion_cfg.get('NUM_HEADS', 4))
+	action_fusion_cfg.NUM_LAYERS = int(action_fusion_cfg.get('NUM_LAYERS', 1))
+	action_fusion_cfg.DROPOUT = float(action_fusion_cfg.get('DROPOUT', 0.1))
+	action_fusion_cfg.MAX_SEQ_LEN = int(action_fusion_cfg.get('MAX_SEQ_LEN', cfg.future_frames * 2))
+	action_fusion_cfg.INCLUDE_HISTORY = bool(action_fusion_cfg.get('INCLUDE_HISTORY', True))
+	action_fusion_cfg.USE_RAW_CTRL_RESIDUAL = bool(action_fusion_cfg.get('USE_RAW_CTRL_RESIDUAL', True))
+	cfg.MODEL.ACTION_FUSION = action_fusion_cfg
 
 	if method_name == 'cogflow':
 		cfg.trainer_name = 'cogflow'
