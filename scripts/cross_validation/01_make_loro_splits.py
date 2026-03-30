@@ -39,6 +39,7 @@ def _split_train_val(
     trial_col: str,
     val_frac: float,
     min_val_trials_per_rat: int,
+    max_val_trials_per_rat: int,
     seed: int,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     train_parts: List[pd.DataFrame] = []
@@ -53,6 +54,7 @@ def _split_train_val(
 
         n_val = int(round(n_trials * float(val_frac)))
         n_val = max(int(min_val_trials_per_rat), n_val)
+        n_val = min(int(max_val_trials_per_rat), n_val)
         n_val = min(n_trials - 1, n_val)
         if n_val <= 0:
             train_parts.append(group_df)
@@ -92,6 +94,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--strict", action="store_true", help="Raise if any selected rat has < min trials")
     p.add_argument("--val-frac", type=float, default=0.2, help="Fraction of non-heldout trials used for validation.")
     p.add_argument("--min-val-trials-per-rat", type=int, default=1)
+    p.add_argument("--max-val-trials-per-rat", type=int, default=1, help="Upper bound of validation trials kept from each training rat.")
     p.add_argument("--seed", type=int, default=42)
     return p
 
@@ -150,6 +153,7 @@ def main() -> None:
             trial_col=args.trial_col,
             val_frac=float(args.val_frac),
             min_val_trials_per_rat=int(args.min_val_trials_per_rat),
+            max_val_trials_per_rat=int(args.max_val_trials_per_rat),
             seed=int(args.seed),
         )
 

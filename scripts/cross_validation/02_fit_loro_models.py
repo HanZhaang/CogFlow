@@ -135,13 +135,17 @@ def materialize_split_dataset(split_path: Path, dataset_root: Path, past_frames:
     target_dir = ensure_dir(dataset_root / "rat_ver2_smooth_3060")
     train_pose_path = target_dir / "rat_pose_train.npy"
     train_cmd_path = target_dir / "rat_stim_train.npy"
-    val_pose_path = target_dir / "rat_pose_test.npy"
-    val_cmd_path = target_dir / "rat_stim_test.npy"
+    val_pose_path = target_dir / "rat_pose_val.npy"
+    val_cmd_path = target_dir / "rat_stim_val.npy"
+    val_pose_test_alias = target_dir / "rat_pose_test.npy"
+    val_cmd_test_alias = target_dir / "rat_stim_test.npy"
 
     np.save(train_pose_path, train_pose)
     np.save(train_cmd_path, train_cmd)
     np.save(val_pose_path, val_pose)
     np.save(val_cmd_path, val_cmd)
+    np.save(val_pose_test_alias, val_pose)
+    np.save(val_cmd_test_alias, val_cmd)
 
     pd.DataFrame(train_meta).to_csv(dataset_root / "train_windows.csv", index=False)
     pd.DataFrame(val_meta).to_csv(dataset_root / "val_windows.csv", index=False)
@@ -159,6 +163,8 @@ def materialize_split_dataset(split_path: Path, dataset_root: Path, past_frames:
         "train_cmd_path": str(train_cmd_path.resolve()),
         "val_pose_path": str(val_pose_path.resolve()),
         "val_cmd_path": str(val_cmd_path.resolve()),
+        "val_pose_test_alias": str(val_pose_test_alias.resolve()),
+        "val_cmd_test_alias": str(val_cmd_test_alias.resolve()),
         "train_manifest": str(train_manifest.resolve()),
         "val_manifest": str(val_manifest.resolve()),
         "heldout_test_manifest": str(test_manifest.resolve()),
