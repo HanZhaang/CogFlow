@@ -1,6 +1,11 @@
+import argparse
+import json
+from pathlib import Path
+from typing import Dict, Optional, Sequence, Union
+
 import numpy as np
+
 from utils.pred_future_io import load_pred_fut
-from typing import Dict, Optional, Union, Sequence
 
 ArrayLike = Union[np.ndarray]
 
@@ -134,8 +139,89 @@ def evaluate_predictions(
     }
     return performance
 
-if __name__ == '__main__':
-    bundle = load_pred_fut("/root/CogFlow/cfg/full_cfg/npz/rat_cogflow.npz")
-    perf = evaluate_predictions(bundle["pred"], bundle["fut"], horizons=[10, 20, 30, 40, 50, 60])
-    print(perf["ADE_min"], perf["FDE_min"], perf["Diversity"])
-    
+
+def _default_horizons(total_frames: int) -> Sequence[int]:
+    if total_frames >= 10 and total_frames % 10 == 0:
+        return list(range(10, total_frames + 1, 10))
+    return [total_frames]
+
+
+def performance_to_serializable(performance: Dict[str, np.ndarray]) -> Dict[str, Union[int, float, list]]:
+    serializable = {}
+    for key, value in performance.items():
+        if isinstance(value, np.ndarray):
+            if value.ndim == 0:
+                serializable[key] = value.item()
+            else:
+                serializable[key] = value.tolist()
+        else:
+            serializable[key] = value
+    return serializable
+
+
+def print_performance(performance: Dict[str, np.ndarray]) -> None:
+    horizons = performance["horizons"].tolist()
+    ade_min = performance["ADE_min"].tolist()
+    fde_min = performance["FDE_min"].tolist()
+    ade_avg = performance["ADE_avg"].tolist()
+    fde_avg = performance["FDE_avg"].tolist()
+    diversity = performance["Diversity"].tolist()
+
+    print(
+        f"num_trajs={int(performance['num_trajs'])} "
+        f"K={int(performance['K'])} F={int(performance['F'])} D={int(performance['D'])}"
+    )
+    for horizon, ade_m, fde_m, ade_a, fde_a, div in zip(
+        horizons, ade_min, fde_min, ade_avg, fde_avg, diversity
+    ):
+        print(
+            "horizon={:>3d} | ADE_min={:.6f} | FDE_min={:.6f} | "
+            "ADE_avg={:.6f} | FDE_avg={:.6f} | Diversity={:.6f}".format(
+                int(horizon), ade_m, fde_m, ade_a, fde_a, div
+            )
+        )
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Offline public evaluation for saved prediction npz files.")
+    parser.add_argument("--npz_path", required=True, help="Path to the saved prediction npz.")
+    parser.add_argument(
+        "--horizons",
+        nargs="*",
+        type=int,
+        default=None,
+        help="Evaluation horizons in frames. Default: auto infer as 10,20,...,F when possible.",
+    )
+    parser.add_argument(
+        "--output_json",
+        type=str,
+        default=None,
+        help="Optional path to dump metrics as JSON.",
+    )
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    bundle = load_pred_fut(args.npz_path)
+    # pred = bundle["pred"]
+    # fut = bundle["fut"]
+    pred = np.load("/root/CogFlow/visualize/trajs/drift_arr2_best/pred_trajs.npy")
+    fut = np.load("/root/CogFlow/visualize/trajs/drift_arr2_best/fut_gt_trajs.npy")
+
+    total_frames = pred.shape[-2]
+    horizons = args.horizons if args.horizons else _default_horizons(total_frames)
+    performance = evaluate_predictions(pred, fut, horizons=horizons)
+    print_performance(performance)
+
+    if args.output_json:
+        output_path = Path(args.output_json)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(
+            json.dumps(performance_to_serializable(performance), indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+
+if __name__ == "__main__":
+    main()
