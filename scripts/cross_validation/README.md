@@ -126,26 +126,26 @@ CUDA_VISIBLE_DEVICES=3 python scripts/cross_subject/00_build_rat_manifest.py
 ### 4.1 从 fidelity trial_index 生成 manifest（默认 rat_id=0）
 
 ```bash
-python scripts/cross_subject/00_build_rat_manifest.py \
+python scripts/cross_validation/00_build_rat_manifest.py \
   --trial-index data/processed/fidelity/trial_index.csv \
-  --out-dir outputs/cross_subject
+  --out-dir outputs/cross_validation
 ```
 
 ### 4.2 手工改 manifest 的 rat_id 后，导出 flow_by_rat
 
 ```bash
-python scripts/cross_subject/00_build_rat_manifest.py \
-  --manifest-input outputs/cross_subject/manifest.csv \
-  --out-dir outputs/cross_subject \
+python scripts/cross_validation/00_build_rat_manifest.py \
+  --manifest-input outputs/cross_validation/manifest.csv \
+  --out-dir outputs/cross_validation \
   --split-flow-by-rat
 ```
 
 ### 4.3 基于 manifest 生成 LORO splits
 
 ```bash
-python scripts/cross_subject/01_make_loro_splits.py \
-  --manifest outputs/cross_subject/manifest.csv \
-  --out-dir outputs/cross_subject/splits \
+python scripts/cross_validation/01_make_loro_splits.py \
+  --manifest outputs/cross_validation/manifest.csv \
+  --out-dir outputs/cross_validation/splits \
   --min-trials-per-rat 1 \
   --strict
 ```
@@ -184,20 +184,20 @@ python scripts/cross_subject/01_make_loro_splits.py \
 仅训练状态模型：
 
 ```bash
-python scripts/cross_subject/02_fit_loro_models.py \
-  --split-dir outputs/cross_subject/splits \
-  --out-dir outputs/cross_subject/models \
+python scripts/cross_validation/02_fit_loro_models.py \
+  --split-dir outputs/cross_validation/splits \
+  --out-dir outputs/cross_validation/models \
   --fit-state
 ```
 
 仅训练 DiffSTG（调用 `algorithm/train.py`）：
 
 ```bash
-python scripts/cross_subject/02_fit_loro_models.py \
-  --split-dir outputs/cross_subject/splits \
+python scripts/cross_validation/02_fit_loro_models.py \
+  --split-dir outputs/cross_validation/splits \
   --fit-motion \
-  --flow-dir outputs/cross_subject/flow_by_rat \
-  --motion-out-dir checkpoints/motion_generation
+  --flow-dir outputs/cross_validation/flow_by_rat \
+  --motion-out-dir results_rat/cross_validattion
 ```
 
 若已有 `train.py` 产出的权重（如 `checkpoints/loro_*/best.pt`），可跳过重训：

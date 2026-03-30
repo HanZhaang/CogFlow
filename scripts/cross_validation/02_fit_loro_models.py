@@ -331,7 +331,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p.add_argument("--past-frames", type=int, default=30)
     p.add_argument("--future-frames", type=int, default=60)
-    p.add_argument("--window-stride", type=int, default=1)
+    p.add_argument("--window-stride", type=int, default=15)
     p.add_argument("--train-batch-size", type=int, default=16)
     p.add_argument("--test-batch-size", type=int, default=16)
     p.add_argument("--num-workers", type=int, default=4)
