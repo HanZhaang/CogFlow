@@ -27,6 +27,7 @@ class MotionTransformer(nn.Module):
         use_pre_norm = self.model_cfg.get('USE_PRE_NORM', False)
         self.ablation_mode = self.config.CNSDE
         self.time_chunk_size = int(self.model_cfg.get('DECODER_TIME_CHUNK', 0))
+        self.num_regimes = int(self.model_cfg.get('NUM_REGIMES', self.config.get('num_regime', 3)))
         assert not use_pre_norm, "Pre-norm is not supported in this model"
         self.T_f = self.config.get('future_frames', 0)
         self.dt = self.config.get('dt', 0)
@@ -81,7 +82,7 @@ class MotionTransformer(nn.Module):
             self.neural_sde = ControlledSSLSDE(
                 z_dim=self.model_cfg.get('COG_D_Z', 0),
                 stim_dim=self.model_cfg.get('COND_D_CUE', 0),
-                num_regimes=3,
+                num_regimes=self.num_regimes,
                 num_bases=16,
                 hidden_dim=self.dim,
                 init_scale=0.1,
@@ -474,6 +475,7 @@ class IMLETransformer(nn.Module):
         assert not use_pre_norm, "Pre-norm is not supported in this model"
         self.T_f = self.cfg.get('future_frames', 0)
         self.dt = self.cfg.get('dt', 0)
+        self.num_regimes = int(self.model_cfg.get('NUM_REGIMES', self.cfg.get('num_regime', 3)))
 
         # （1）上下文编码器：把历史轨迹/邻居信息编码成每个 agent 的上下文向量
         self.context_encoder = build_context_encoder(self.model_cfg.CONTEXT_ENCODER, use_pre_norm, config.device)
@@ -490,7 +492,7 @@ class IMLETransformer(nn.Module):
         self.neural_sde = ControlledSSLSDE(
             z_dim=self.model_cfg.get('COG_D_Z', 0),
             stim_dim=self.model_cfg.get('COND_D_CUE', 0),
-            num_regimes=3,
+            num_regimes=self.num_regimes,
             num_bases=16,
             hidden_dim=self.dim,
             init_scale=0.1,

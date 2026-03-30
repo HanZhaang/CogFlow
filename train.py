@@ -34,6 +34,7 @@ def parse_config():
 	parser.add_argument('--variant', type=str, help="Method variant, e.g. gru or transformer")
 	parser.add_argument('--decoder', type=str, choices=['moflow_structured', 'mlp'], help="Decoder backend")
 	parser.add_argument('--action_fusion', type=str, choices=['none', 'cross_attention'], help="Action fusion backend")
+	parser.add_argument('--num-regime', type=int, default=3, help="Number of regimes for ControlledSSLSDE")
 	parser.add_argument('--enable_dissipativity', action='store_true', help="Enable boundedness loss (legacy alias)")
 	parser.add_argument('--dissipativity_weight', type=float, default=None, help="Boundedness loss weight override (legacy alias)")
 
@@ -64,6 +65,9 @@ def apply_runtime_overrides(cfg, args):
 	method_cfg.ACTION_FUSION = args.action_fusion or method_cfg.get('ACTION_FUSION', 'none')
 	method_cfg.TRAINER = method_cfg.get('TRAINER', 'forecast')
 	cfg.yml_dict['METHOD'] = method_cfg
+
+	cfg.num_regime = int(args.num_regime)
+	cfg.MODEL.NUM_REGIMES = int(args.num_regime)
 
 	action_fusion_cfg = cfg.MODEL.get('ACTION_FUSION', EasyDict())
 	if not isinstance(action_fusion_cfg, EasyDict):
