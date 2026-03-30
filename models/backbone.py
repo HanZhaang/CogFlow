@@ -241,30 +241,15 @@ class MotionTransformer(nn.Module):
             time_token = self.temporal_readout_mlp(
                 base_readout * (1 + gamma[:, None, None, :, :]) + beta[:, None, None, :, :]
             )
-<<<<<<< HEAD
             return self.reg_head(time_token)
-=======
-            if self.use_mlp_decoder:
-                return self.reg_head(query_token)
-            return self.reg_head(self.motion_decoder(query_token, t_emb))
->>>>>>> origin/main
 
         outputs = []
         for start in range(0, self.T_f, chunk_size):
             end = min(start + chunk_size, self.T_f)
-<<<<<<< HEAD
             time_chunk = self.temporal_readout_mlp(
                 base_readout * (1 + gamma[:, None, None, start:end, :]) + beta[:, None, None, start:end, :]
             )
             outputs.append(self.reg_head(time_chunk))
-=======
-            fused_chunk = base_fusion * (1 + gamma[:, :, :, start:end]) + beta[:, :, :, start:end]
-            query_chunk = self.post_pe_cat_mlp(self.apply_PE(fused_chunk, k_pe, a_pe))
-            if self.use_mlp_decoder:
-                outputs.append(self.reg_head(query_chunk))
-            else:
-                outputs.append(self.reg_head(self.motion_decoder(query_chunk, t_emb)))
->>>>>>> origin/main
         return torch.cat(outputs, dim=3)
     
     def get_z_rollout(self, x_data, return_terms: bool = False):

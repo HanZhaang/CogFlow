@@ -60,7 +60,7 @@ ACTION_MAP = {"None": 0, "go_ahead": 1, "turn_left": 2, "turn_right": 3}
 
 
 def default_cross_subject_path(*parts: str) -> Path:
-    return ROOT.joinpath("outputs", "cross_subject", *parts)
+    return ROOT.joinpath("outputs", "cross_validation", *parts)
 
 
 def ensure_dir(path: Path) -> Path:
