@@ -195,9 +195,8 @@ python scripts/cross_validation/02_fit_loro_models.py \
 ```bash
 python scripts/cross_validation/02_fit_loro_models.py \
   --split-dir outputs/cross_validation/splits \
-  --fit-motion \
-  --flow-dir outputs/cross_validation/flow_by_rat \
-  --motion-out-dir results_rat/cross_validattion
+  --motion-out-dir results_rat/cross_validattion \
+  --cfg-template cfg/full_cfg
 ```
 
 若已有 `train.py` 产出的权重（如 `checkpoints/loro_*/best.pt`），可跳过重训：

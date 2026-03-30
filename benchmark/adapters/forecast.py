@@ -78,11 +78,12 @@ class _ForecastAdapter(MethodAdapter):
         self.trainer.denoiser.eval()
 
     def inference_step(self, batch: Dict[str, Any], num_samples: int) -> torch.Tensor:
-        if self.cfg.METHOD.NAME == "cogflow":
-            with self._temporary_num_samples(num_samples):
+        with self.trainer.accelerator.autocast():
+            if self.cfg.METHOD.NAME == "cogflow":
+                with self._temporary_num_samples(num_samples):
+                    pred = self.trainer.denoiser.predict(batch, num_samples=num_samples, return_trace=False)
+            else:
                 pred = self.trainer.denoiser.predict(batch, num_samples=num_samples, return_trace=False)
-        else:
-            pred = self.trainer.denoiser.predict(batch, num_samples=num_samples, return_trace=False)
         return pred.samples
 
     def get_inference_metadata(self, num_samples: int) -> Dict[str, Any]:

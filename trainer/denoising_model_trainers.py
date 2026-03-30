@@ -526,7 +526,13 @@ class Trainer(object):
         """
 
         # [B, K, A, T*F], [B, S, K, A, T*F], [B, S, K, A, T*F], [B, K, A]
-        pred_traj, pred_traj_at_t, t_seq, y_t_seq, pred_score = self.denoiser.sample(data, num_trajs=self.cfg.denoising_head_preds, return_all_states=self.save_samples)
+        with self.accelerator.autocast():
+            pred_traj, pred_traj_at_t, t_seq, y_t_seq, pred_score = self.denoiser.sample(
+                data,
+                num_trajs=self.cfg.denoising_head_preds,
+                return_all_states=self.save_samples,
+                collect_trace=True,
+            )
         # print("??? pred_traj shape = {}".format(pred_traj.shape))
         assert list(pred_traj.shape[2:]) == [self.cfg.agents, self.cfg.MODEL.MODEL_OUT_DIM]
 
