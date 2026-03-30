@@ -3,13 +3,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -17,24 +19,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.cross_validation.ver2_dataset import default_cross_subject_path
-try:
-    from simactrat.state_models import DiscreteHMMModel, MarkovChainModel, SemiMarkovModel
-except ImportError as exc:
-    DiscreteHMMModel = None
-    MarkovChainModel = None
-    SemiMarkovModel = None
-    _SIMACTRAT_IMPORT_ERROR = exc
-else:
-    _SIMACTRAT_IMPORT_ERROR = None
 
 
 def ensure_dir(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     return path
-
-
-def parse_csv_list(raw: str) -> List[str]:
-    return [x.strip() for x in str(raw).split(",") if x.strip()]
 
 
 def discover_splits(split_dir: Path, split_name: str = "") -> List[Path]:
@@ -51,264 +40,335 @@ def discover_splits(split_dir: Path, split_name: str = "") -> List[Path]:
     return out
 
 
-def load_sequences(manifest_path: Path, min_len: int) -> tuple[List[np.ndarray], int]:
+def load_pose_cmd_from_manifest_row(row: pd.Series) -> Tuple[np.ndarray, np.ndarray]:
+    pose_path = Path(str(row.get("pose_path", ""))).expanduser()
+    cmd_path = Path(str(row.get("cmd_path", ""))).expanduser()
+    if not pose_path.exists():
+        raise FileNotFoundError(f"pose_path missing: {pose_path}")
+    if not cmd_path.exists():
+        raise FileNotFoundError(f"cmd_path missing: {cmd_path}")
+
+    pose = np.asarray(np.load(pose_path, allow_pickle=True), dtype=np.float32)
+    cmd = np.asarray(np.load(cmd_path, allow_pickle=True), dtype=np.float32)
+
+    if pose.ndim != 3 or pose.shape[-1] != 2:
+        raise ValueError(f"pose must be (T,A,2), got {pose.shape} at {pose_path}")
+    if cmd.ndim != 2:
+        raise ValueError(f"cmd must be (T,C), got {cmd.shape} at {cmd_path}")
+    if pose.shape[0] != cmd.shape[0]:
+        raise ValueError(f"pose/cmd length mismatch: pose={pose.shape[0]} cmd={cmd.shape[0]} for {pose_path}")
+    return pose, normalize_cmd_for_rat_loader(cmd)
+
+
+def normalize_cmd_for_rat_loader(cmd: np.ndarray) -> np.ndarray:
+    cmd = np.asarray(cmd, dtype=np.float32)
+    if cmd.ndim != 2:
+        raise ValueError(f"cmd must be 2D, got {cmd.shape}")
+    if cmd.shape[1] == 2:
+        return cmd.astype(np.float32, copy=False)
+    if cmd.shape[1] >= 7:
+        action = np.argmax(cmd[:, :4], axis=1).astype(np.float32)
+        strength = cmd[:, 4].astype(np.float32)
+        return np.stack([action, strength], axis=1).astype(np.float32)
+    raise ValueError(f"unsupported cmd shape for rat loader: {cmd.shape}")
+
+
+def window_starts(length: int, seq_len: int, stride: int) -> List[int]:
+    if length < seq_len:
+        return []
+    return list(range(0, int(length - seq_len + 1), max(1, int(stride))))
+
+
+def build_windows_from_manifest(manifest_path: Path, seq_len: int, stride: int) -> Tuple[np.ndarray, np.ndarray, List[Dict[str, object]]]:
     df = pd.read_csv(manifest_path)
-    if "state_path" not in df.columns:
-        raise ValueError(f"manifest missing state_path: {manifest_path}")
-    seqs: List[np.ndarray] = []
-    total_frames = 0
+    if df.empty:
+        raise ValueError(f"manifest is empty: {manifest_path}")
+
+    pose_windows: List[np.ndarray] = []
+    cmd_windows: List[np.ndarray] = []
+    meta_rows: List[Dict[str, object]] = []
+
     for _, row in df.iterrows():
-        path = Path(str(row["state_path"]))
-        if not path.exists():
-            continue
-        s = np.asarray(np.load(path, allow_pickle=True)).reshape(-1).astype(np.int32)
-        s = s[s >= 0]
-        if s.size < int(min_len):
-            continue
-        seqs.append(s)
-        total_frames += int(s.size)
-    return seqs, total_frames
+        pose, cmd = load_pose_cmd_from_manifest_row(row)
+        starts = window_starts(length=int(pose.shape[0]), seq_len=seq_len, stride=stride)
+        trial_id = str(row.get("trial_id", ""))
+        rat_id = str(row.get("rat_id", ""))
+        for start in starts:
+            end = start + seq_len
+            pose_windows.append(pose[start:end])
+            cmd_windows.append(cmd[start:end])
+            meta_rows.append(
+                {
+                    "trial_id": trial_id,
+                    "rat_id": rat_id,
+                    "start": int(start),
+                    "end": int(end),
+                    "source_pose_path": str(row.get("pose_path", "")),
+                    "source_cmd_path": str(row.get("cmd_path", "")),
+                }
+            )
+
+    if not pose_windows:
+        raise RuntimeError(f"no windows generated from {manifest_path}; check seq_len/stride")
+
+    return (
+        np.stack(pose_windows, axis=0).astype(np.float32),
+        np.stack(cmd_windows, axis=0).astype(np.float32),
+        meta_rows,
+    )
 
 
-def build_state_model(name: str, args: argparse.Namespace):
-    if _SIMACTRAT_IMPORT_ERROR is not None:
-        raise ImportError(
-            "state-model fitting requires simactrat to be installed; "
-            f"original import error: {_SIMACTRAT_IMPORT_ERROR}"
-        )
-    n_states = None if int(args.n_states) <= 0 else int(args.n_states)
-    if name == "mc":
-        return MarkovChainModel(n_states=n_states, laplace=float(args.laplace))
-    if name == "hmm":
-        n_hidden = int(args.hmm_n_hidden) if int(args.hmm_n_hidden) > 0 else None
-        return DiscreteHMMModel(
-            n_states=n_states,
-            n_hidden=n_hidden,
-            n_iter=int(args.hmm_n_iter),
-            tol=float(args.hmm_tol),
-            laplace=float(args.hmm_laplace),
-            random_state=int(args.seed),
-        )
-    if name == "smp":
-        return SemiMarkovModel(
-            n_states=n_states,
-            max_dwell=int(args.max_dwell),
-            laplace=float(args.laplace),
-            dwell_smoothing=float(args.dwell_smoothing),
-        )
-    raise ValueError(f"unsupported state model: {name}")
+def materialize_split_dataset(split_path: Path, dataset_root: Path, past_frames: int, future_frames: int, stride: int) -> Dict[str, object]:
+    seq_len = int(past_frames) + int(future_frames)
+    train_pose, train_cmd, train_meta = build_windows_from_manifest(split_path / "train_manifest.csv", seq_len=seq_len, stride=stride)
+    test_pose, test_cmd, test_meta = build_windows_from_manifest(split_path / "test_manifest.csv", seq_len=seq_len, stride=stride)
 
+    target_dir = ensure_dir(dataset_root / "rat_ver2_smooth_3060")
+    train_pose_path = target_dir / "rat_pose_train.npy"
+    train_cmd_path = target_dir / "rat_stim_train.npy"
+    test_pose_path = target_dir / "rat_pose_test.npy"
+    test_cmd_path = target_dir / "rat_stim_test.npy"
 
-def fit_state_models_for_split(split_path: Path, out_root: Path, args: argparse.Namespace) -> Dict[str, object]:
-    train_manifest = split_path / "train_manifest.csv"
-    test_manifest = split_path / "test_manifest.csv"
-    if not train_manifest.exists() or not test_manifest.exists():
-        raise FileNotFoundError(f"split missing train/test manifest: {split_path}")
+    np.save(train_pose_path, train_pose)
+    np.save(train_cmd_path, train_cmd)
+    np.save(test_pose_path, test_pose)
+    np.save(test_cmd_path, test_cmd)
 
-    train_seqs, train_frames = load_sequences(train_manifest, min_len=int(args.min_len))
-    test_seqs, test_frames = load_sequences(test_manifest, min_len=int(args.min_len))
-    if not train_seqs:
-        raise RuntimeError(f"{split_path.name}: no valid train sequences after filtering")
+    pd.DataFrame(train_meta).to_csv(dataset_root / "train_windows.csv", index=False)
+    pd.DataFrame(test_meta).to_csv(dataset_root / "test_windows.csv", index=False)
 
-    model_dir = ensure_dir(out_root / split_path.name / "state")
-    rows: List[Dict[str, object]] = []
-    for name in parse_csv_list(args.state_models):
-        model = build_state_model(name, args)
-        model.fit(train_seqs)
-        path = model_dir / f"{name}.pkl"
-        model.save(path)
-        rows.append(
-            {
-                "split": split_path.name,
-                "model": name,
-                "model_path": str(path.resolve()),
-                "n_states": int(getattr(model, "n_states", -1)),
-                "n_train_trials": int(len(train_seqs)),
-                "n_train_frames": int(train_frames),
-                "n_test_trials": int(len(test_seqs)),
-                "n_test_frames": int(test_frames),
-            }
-        )
-
-    out_table = model_dir / "fit_summary.csv"
-    pd.DataFrame(rows).to_csv(out_table, index=False)
-    return {
+    summary = {
         "split": split_path.name,
-        "train_manifest": str(train_manifest.resolve()),
-        "test_manifest": str(test_manifest.resolve()),
-        "state_model_dir": str(model_dir.resolve()),
-        "n_train_seq": int(len(train_seqs)),
-        "n_test_seq": int(len(test_seqs)),
+        "dataset_root": str(dataset_root.resolve()),
+        "seq_len": int(seq_len),
+        "past_frames": int(past_frames),
+        "future_frames": int(future_frames),
+        "train_windows": int(train_pose.shape[0]),
+        "test_windows": int(test_pose.shape[0]),
+        "agents": int(train_pose.shape[2]),
+        "train_pose_path": str(train_pose_path.resolve()),
+        "train_cmd_path": str(train_cmd_path.resolve()),
+        "test_pose_path": str(test_pose_path.resolve()),
+        "test_cmd_path": str(test_cmd_path.resolve()),
     }
+    with (dataset_root / "dataset_summary.json").open("w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2, ensure_ascii=True)
+    return summary
 
 
-def run_motion_train_for_split(split_path: Path, args: argparse.Namespace) -> int:
-    legacy_train = ROOT / "algorithm" / "train.py"
-    if not legacy_train.exists():
-        raise FileNotFoundError(
-            "legacy DiffSTG trainer not found at "
-            f"{legacy_train}. Use existing CogFlow/CodSDE checkpoints with "
-            "--skip-motion-if-best-exists and --motion-existing-roots."
-        )
-    cmd = [
-        sys.executable,
-        str(legacy_train),
-        "--run-loro",
-        "--split-dir",
-        str(Path(args.split_dir).resolve()),
-        "--split-name",
-        split_path.name,
-        "--flow-dir",
-        str(Path(args.flow_dir).resolve()),
-        "--out-dir",
-        str(Path(args.motion_out_dir).resolve()),
-        "--adj-path",
-        str(Path(args.adj_path).resolve()),
-        "--epochs",
-        str(args.epochs),
-        "--batch-size",
-        str(args.batch_size),
-        "--lr",
-        str(args.lr),
-        "--early-stop",
-        str(args.early_stop),
-        "--T_h",
-        str(args.T_h),
-        "--T_p",
-        str(args.T_p),
-        "--N",
-        str(args.N),
-        "--hidden-size",
-        str(args.hidden_size),
-        "--beta-schedule",
-        str(args.beta_schedule),
-        "--beta-end",
-        str(args.beta_end),
-        "--sample-steps",
-        str(args.sample_steps),
-        "--sample-strategy",
-        str(args.sample_strategy),
-        "--seed",
-        str(args.seed),
-    ]
-    if float(args.mask_ratio) > 0:
-        cmd.extend(["--mask-ratio", str(args.mask_ratio)])
-    if int(args.num_workers) > 0:
-        cmd.extend(["--num-workers", str(args.num_workers)])
-    print(f"[02] run motion train: {' '.join(cmd)}")
-    proc = subprocess.run(cmd, check=False)
-    return int(proc.returncode)
+def write_split_cfg(
+    split_name: str,
+    cfg_template: Path,
+    cfg_out_path: Path,
+    results_root_dir: Path,
+    dataset_root: Path,
+    n_train: int,
+    n_test: int,
+    train_batch_size: int,
+    test_batch_size: int,
+    num_workers: int,
+    epochs: Optional[int],
+    lr: Optional[float],
+    past_frames: int,
+    future_frames: int,
+) -> Dict[str, object]:
+    with cfg_template.open("r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+
+    cfg["results_root_dir"] = str(results_root_dir.resolve())
+    cfg["data_dir"] = str(dataset_root.resolve())
+    cfg["n_train"] = int(n_train)
+    cfg["n_test"] = int(n_test)
+    cfg["past_frames"] = int(past_frames)
+    cfg["future_frames"] = int(future_frames)
+    cfg["train_batch_size"] = int(train_batch_size)
+    cfg["test_batch_size"] = int(test_batch_size)
+    cfg["num_workers"] = int(num_workers)
+    cfg["dataset"] = "rat"
+    cfg["dataset_name"] = "rat_dataset"
+    cfg["MODEL"]["NAME"] = "cogflow"
+    cfg["MODEL"]["MODEL_OUT_DIM"] = int(future_frames) * 2
+    cfg["notes"] = f"LORO CogFlow split={split_name}"
+
+    if epochs is not None:
+        cfg["OPTIMIZATION"]["NUM_EPOCHS"] = int(epochs)
+    if lr is not None:
+        cfg["OPTIMIZATION"]["LR"] = float(lr)
+
+    ensure_dir(cfg_out_path.parent)
+    with cfg_out_path.open("w", encoding="utf-8") as f:
+        yaml.safe_dump(cfg, f, sort_keys=False)
+    return cfg
+
+
+def expected_run_dir(results_root_dir: Path, cfg_path: Path, exp_name: str) -> Path:
+    cfg_name = cfg_path.stem
+    return results_root_dir / cfg_name / f"{exp_name}_"
+
+
+def canonical_checkpoint_dir(motion_out_dir: Path, split_name: str) -> Path:
+    return motion_out_dir / split_name / "models"
+
+
+def canonical_checkpoint_path(motion_out_dir: Path, split_name: str) -> Path:
+    return canonical_checkpoint_dir(motion_out_dir, split_name) / "checkpoint_best.pt"
 
 
 def resolve_existing_motion_best(split_name: str, args: argparse.Namespace) -> Optional[Path]:
-    best_name = str(args.motion_best_name).strip() or "best.pt"
-    candidates: List[Path] = []
-
-    # Primary output location used by algorithm/train.py
-    candidates.append(Path(args.motion_out_dir).resolve() / split_name / best_name)
-
-    # Optional extra roots for existing checkpoints (e.g., checkpoints/loro_*/best.pt)
-    for raw in parse_csv_list(args.motion_existing_roots):
+    candidates = [
+        canonical_checkpoint_path(Path(args.motion_out_dir).resolve(), split_name),
+    ]
+    for raw in str(args.motion_existing_roots).split(","):
+        raw = raw.strip()
+        if not raw:
+            continue
         root = Path(raw)
         root = root if root.is_absolute() else (ROOT / root)
-        candidates.append(root.resolve() / split_name / best_name)
-
-    for p in candidates:
-        if p.exists():
-            return p
+        candidates.append(root.resolve() / split_name / "models" / "checkpoint_best.pt")
+        candidates.append(root.resolve() / split_name / "checkpoint_best.pt")
+    for path in candidates:
+        if path.exists():
+            return path.resolve()
     return None
+
+
+def archive_run_artifacts(run_dir: Path, cfg_path: Path, motion_out_dir: Path, split_name: str) -> Dict[str, str]:
+    ckpt_src = run_dir / "models" / "checkpoint_best.pt"
+    if not ckpt_src.exists():
+        raise FileNotFoundError(f"training finished but checkpoint_best.pt not found: {ckpt_src}")
+
+    split_root = ensure_dir(Path(motion_out_dir) / split_name)
+    split_model_dir = ensure_dir(split_root / "models")
+    split_cfg_path = split_root / cfg_path.name
+    split_meta_path = split_root / "train_run_meta.json"
+    ckpt_dst = split_model_dir / "checkpoint_best.pt"
+
+    shutil.copy2(ckpt_src, ckpt_dst)
+    shutil.copy2(cfg_path, split_cfg_path)
+    meta = {
+        "run_dir": str(run_dir.resolve()),
+        "checkpoint_src": str(ckpt_src.resolve()),
+        "checkpoint_dst": str(ckpt_dst.resolve()),
+        "config_path": str(split_cfg_path.resolve()),
+    }
+    with split_meta_path.open("w", encoding="utf-8") as f:
+        json.dump(meta, f, indent=2, ensure_ascii=True)
+    return meta
+
+
+def run_cogflow_train_for_split(split_path: Path, args: argparse.Namespace) -> Dict[str, object]:
+    split_name = split_path.name
+    prep_root = ensure_dir(Path(args.prep_root).resolve())
+    dataset_root = ensure_dir(prep_root / split_name / "dataset")
+    cfg_out_path = prep_root / split_name / "cfg" / f"{split_name}.yml"
+    results_root_dir = ensure_dir(Path(args.motion_out_dir).resolve() / "_train_runs")
+
+    dataset_info = materialize_split_dataset(
+        split_path=split_path,
+        dataset_root=dataset_root,
+        past_frames=int(args.past_frames),
+        future_frames=int(args.future_frames),
+        stride=int(args.window_stride),
+    )
+    write_split_cfg(
+        split_name=split_name,
+        cfg_template=Path(args.cfg_template).resolve(),
+        cfg_out_path=cfg_out_path,
+        results_root_dir=results_root_dir,
+        dataset_root=dataset_root,
+        n_train=int(dataset_info["train_windows"]),
+        n_test=int(dataset_info["test_windows"]),
+        train_batch_size=int(args.train_batch_size),
+        test_batch_size=int(args.test_batch_size),
+        num_workers=int(args.num_workers),
+        epochs=int(args.epochs) if args.epochs > 0 else None,
+        lr=float(args.lr) if args.lr > 0 else None,
+        past_frames=int(args.past_frames),
+        future_frames=int(args.future_frames),
+    )
+
+    exp_name = split_name
+    cmd = [
+        sys.executable,
+        str(ROOT / "train.py"),
+        "--cfg",
+        str(cfg_out_path.resolve()),
+        "--exp",
+        exp_name,
+        "--method",
+        "cogflow",
+    ]
+    print(f"[02] run cogflow train: {' '.join(cmd)}")
+    proc = subprocess.run(cmd, cwd=str(ROOT), check=False)
+    run_dir = expected_run_dir(results_root_dir=results_root_dir, cfg_path=cfg_out_path, exp_name=exp_name)
+
+    out: Dict[str, object] = {
+        "split": split_name,
+        "train_returncode": int(proc.returncode),
+        "generated_cfg": str(cfg_out_path.resolve()),
+        "dataset_root": str(dataset_root.resolve()),
+        "run_dir": str(run_dir.resolve()),
+        **dataset_info,
+    }
+    if proc.returncode == 0:
+        out.update(archive_run_artifacts(run_dir=run_dir, cfg_path=cfg_out_path, motion_out_dir=Path(args.motion_out_dir).resolve(), split_name=split_name))
+    return out
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser("02_fit_loro_models")
     p.add_argument("--split-dir", type=str, default=str(default_cross_subject_path("splits")))
-    p.add_argument("--split-name", type=str, default="", help="optional one split, e.g. loro_RAT_13-2")
-    p.add_argument("--out-dir", type=str, default=str(default_cross_subject_path("models")))
-
-    p.add_argument("--fit-state", action="store_true")
-    p.add_argument("--fit-motion", action="store_true")
-
-    p.add_argument("--state-models", type=str, default="mc,hmm,smp")
-    p.add_argument("--min-len", type=int, default=2)
-    p.add_argument("--n-states", type=int, default=-1)
-    p.add_argument("--laplace", type=float, default=1.0)
-    p.add_argument("--dwell-smoothing", type=float, default=1.0)
-    p.add_argument("--max-dwell", type=int, default=200)
-    p.add_argument("--hmm-n-hidden", type=int, default=-1)
-    p.add_argument("--hmm-n-iter", type=int, default=50)
-    p.add_argument("--hmm-tol", type=float, default=1e-4)
-    p.add_argument("--hmm-laplace", type=float, default=1e-2)
-
-    p.add_argument("--flow-dir", type=str, default=str(default_cross_subject_path("flow_by_rat")))
-    p.add_argument("--adj-path", type=str, default=str(ROOT / "data" / "rat" / "hist10pred20" / "adj.npy"))
-    p.add_argument("--motion-out-dir", type=str, default=str(ROOT / "results_rat"))
+    p.add_argument("--split-name", type=str, default="", help="optional one split, e.g. loro_2023-2-16")
+    p.add_argument("--prep-root", type=str, default=str(default_cross_subject_path("prepared_cogflow")))
+    p.add_argument("--summary-out-dir", type=str, default=str(default_cross_subject_path("models")))
+    p.add_argument("--motion-out-dir", type=str, default=str(ROOT / "results_rat" / "cross_validation"))
+    p.add_argument("--motion-existing-roots", type=str, default=str(ROOT / "results_rat" / "cross_validation"))
+    p.add_argument("--cfg-template", type=str, default=str(ROOT / "cfg" / "full_cfg" / "cor_rat_fm_mn.yml"))
     p.add_argument("--skip-motion-if-best-exists", action="store_true")
-    p.add_argument("--motion-best-name", type=str, default="best.pt")
-    p.add_argument(
-        "--motion-existing-roots",
-        type=str,
-        default=f"{ROOT / 'results_rat'}",
-        help="Comma-separated roots to check for existing <split>/<best_name>",
-    )
-    p.add_argument("--epochs", type=int, default=80)
-    p.add_argument("--batch-size", type=int, default=64)
-    p.add_argument("--lr", type=float, default=2e-3)
-    p.add_argument("--early-stop", type=int, default=12)
-    p.add_argument("--mask-ratio", type=float, default=0.0)
-    p.add_argument("--num-workers", type=int, default=0)
-    p.add_argument("--hidden-size", type=int, default=32)
-    p.add_argument("--N", type=int, default=200)
-    p.add_argument("--beta-schedule", type=str, default="quad")
-    p.add_argument("--beta-end", type=float, default=0.1)
-    p.add_argument("--sample-steps", type=int, default=200)
-    p.add_argument("--sample-strategy", type=str, default="ddpm")
-    p.add_argument("--T_h", type=int, default=18)
-    p.add_argument("--T_p", type=int, default=18)
-    p.add_argument("--seed", type=int, default=42)
+
+    p.add_argument("--fit-motion", action="store_true", help="Compatibility flag; CogFlow motion training is the default behavior.")
+    p.add_argument("--fit-state", action="store_true", help="Unsupported. State-model training has been removed from this script.")
+
+    p.add_argument("--past-frames", type=int, default=30)
+    p.add_argument("--future-frames", type=int, default=60)
+    p.add_argument("--window-stride", type=int, default=1)
+    p.add_argument("--train-batch-size", type=int, default=16)
+    p.add_argument("--test-batch-size", type=int, default=16)
+    p.add_argument("--num-workers", type=int, default=4)
+    p.add_argument("--epochs", type=int, default=600, help="<=0 keeps template value")
+    p.add_argument("--lr", type=float, default=0.001, help="<=0 keeps template value")
     return p
 
 
 def main() -> None:
     args = build_parser().parse_args()
-    if not args.fit_state and not args.fit_motion:
-        raise ValueError("At least one of --fit-state / --fit-motion is required")
+    if args.fit_state:
+        raise ValueError("02_fit_loro_models no longer trains state models. Use CogFlow motion training only.")
 
-    split_paths = discover_splits(Path(args.split_dir), split_name=str(args.split_name).strip())
-    out_root = ensure_dir(Path(args.out_dir))
+    split_paths = discover_splits(Path(args.split_dir).resolve(), split_name=str(args.split_name).strip())
+    summary_out_dir = ensure_dir(Path(args.summary_out_dir).resolve())
     rows: List[Dict[str, object]] = []
 
     for split_path in split_paths:
         print(f"[02] processing split: {split_path.name}")
-        item: Dict[str, object] = {"split": split_path.name}
+        existing_best = resolve_existing_motion_best(split_name=split_path.name, args=args)
+        if args.skip_motion_if_best_exists and existing_best is not None:
+            row = {
+                "split": split_path.name,
+                "motion_status": "skip_exists",
+                "checkpoint_dst": str(existing_best),
+            }
+            rows.append(row)
+            print(f"[02] skip motion train for {split_path.name}: found {existing_best}")
+            continue
 
-        if args.fit_state:
-            state_info = fit_state_models_for_split(split_path, out_root=out_root, args=args)
-            item.update(state_info)
-            item["state_status"] = "ok"
-        else:
-            item["state_status"] = "skip"
+        result = run_cogflow_train_for_split(split_path=split_path, args=args)
+        result["motion_status"] = "ok" if int(result["train_returncode"]) == 0 else f"failed({result['train_returncode']})"
+        rows.append(result)
 
-        if args.fit_motion:
-            existing_best = resolve_existing_motion_best(split_name=split_path.name, args=args)
-            if args.skip_motion_if_best_exists and existing_best is not None:
-                item["motion_status"] = "skip_exists"
-                item["motion_existing_best"] = str(existing_best.resolve())
-                item["motion_run_dir"] = str((Path(args.motion_out_dir) / split_path.name).resolve())
-                print(f"[02] skip motion train for {split_path.name}: found {existing_best}")
-            else:
-                rc = run_motion_train_for_split(split_path, args=args)
-                item["motion_status"] = "ok" if rc == 0 else f"failed({rc})"
-                item["motion_run_dir"] = str((Path(args.motion_out_dir) / split_path.name).resolve())
-                if existing_best is not None:
-                    item["motion_existing_best"] = str(existing_best.resolve())
-        else:
-            item["motion_status"] = "skip"
-
-        rows.append(item)
-
-    summary_path = out_root / "fit_loro_summary.csv"
+    summary_path = summary_out_dir / "fit_loro_summary.csv"
     pd.DataFrame(rows).to_csv(summary_path, index=False)
-    with (out_root / "fit_loro_args.json").open("w", encoding="utf-8") as f:
+    with (summary_out_dir / "fit_loro_args.json").open("w", encoding="utf-8") as f:
         json.dump(vars(args), f, indent=2, ensure_ascii=True)
     print(f"[02] summary: {summary_path}")
 
