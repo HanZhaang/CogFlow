@@ -45,7 +45,7 @@ htmlcov/
 logs/
 *.tmp
 temp/
-
+outputs/
 # OS-specific
 .DS_Store
 Thumbs.db
