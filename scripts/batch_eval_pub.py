@@ -37,6 +37,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cfg", type=str, default="auto", help="Config passed to eval entry.")
     parser.add_argument("--batch-size", type=int, default=None, help="Optional eval batch size override.")
     parser.add_argument("--sampling-steps", type=int, default=None, help="Optional FM sampling steps override.")
+    parser.add_argument("--num-regime", type=int, default=None, help="Optional ControlledSSLSDE regime count override.")
     parser.add_argument("--solver", type=str, default=None, choices=["euler", "lin_poly"], help="Optional FM solver.")
     parser.add_argument("--lin-poly-p", type=int, default=None, help="Optional lin_poly degree override.")
     parser.add_argument(
@@ -114,6 +115,8 @@ def build_eval_cmd(args: argparse.Namespace, repo_root: Path, ckpt_path: Path) -
         cmd.extend(["--batch_size", str(args.batch_size)])
     if args.sampling_steps is not None:
         cmd.extend(["--sampling_steps", str(args.sampling_steps)])
+    if args.num_regime is not None:
+        cmd.extend(["--num-regime", str(args.num_regime)])
     if args.solver is not None:
         cmd.extend(["--solver", args.solver])
     if args.lin_poly_p is not None:
