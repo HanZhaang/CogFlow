@@ -565,7 +565,7 @@ class Trainer(object):
     def save_latent_states(self, t_seq_ls, y_t_seq_ls, y_pred_data_ls, x_data_ls, pred_score_ls, file_name):
         self.logger.info("Begin to save the denoising samples...")
 
-        if self.cfg.dataset in ['nba', 'sdd', 'eth_ucy', 'rat']:
+        if self.cfg.dataset in ['nba', 'sdd', 'eth_ucy', 'rat', 'babel']:
             keys_to_save = ['past_traj', 'fut_traj', 'past_traj_original_scale', 'fut_traj_original_scale', 'fut_traj_vel']
         else:
             raise NotImplementedError(f'Dataset [{self.cfg.dataset}] is not implemented yet.')

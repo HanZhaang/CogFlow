@@ -110,6 +110,10 @@ class RatDatasetMinMax(Dataset):
                 data_root = os.path.join(data_dir, 'rat_ver2_smooth_3060/rat_pose_train.npy')
                 cmd_root = os.path.join(data_dir, 'rat_ver2_smooth_3060/rat_stim_train.npy')
             else:
+<<<<<<< HEAD
+                data_root = os.path.join(data_dir, 'rat_ver2_smooth_3060/rat_pose_val.npy')
+                cmd_root = os.path.join(data_dir, 'rat_ver2_smooth_3060/rat_stim_val.npy')
+=======
                 data_root = _first_existing_path(
                     os.path.join(data_dir, 'rat_ver2_smooth_3060/rat_pose_test.npy'),
                     os.path.join(data_dir, 'rat_ver2_smooth_3060/rat_pose_test.npy'),
@@ -118,6 +122,7 @@ class RatDatasetMinMax(Dataset):
                     os.path.join(data_dir, 'rat_ver2_smooth_3060/rat_stim_test.npy'),
                     os.path.join(data_dir, 'rat_ver2_smooth_3060/rat_stim_test.npy'),
                 )
+>>>>>>> origin
         else:
             data_root = os.path.join(data_dir, 'rat_ver2_smooth_3060/rat_pose_train.npy')
             cmd_root = os.path.join(data_dir, 'rat_ver2_smooth_3060/rat_stim_train.npy')

@@ -98,8 +98,8 @@ class BabelDatasetMinMax(Dataset):
                 data_root = os.path.join(data_dir, 'babel_val.npy')
                 cmd_root = os.path.join(data_dir, 'babel_val_cmd.npy')
         else:
-            data_root = os.path.join(data_dir, 'babel_test.npy')
-            cmd_root = os.path.join(data_dir, 'babel_test_cmd.npy')
+            data_root = os.path.join(data_dir, 'babel_val.npy')
+            cmd_root = os.path.join(data_dir, 'babel_val_cmd.npy')
 
         self.trajs_raw = np.load(data_root) #(N,15,11,2)
         self.cmd_raw = np.load(cmd_root)
