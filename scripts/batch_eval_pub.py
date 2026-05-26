@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import csv
 import json
 import subprocess
 import sys
@@ -12,10 +13,14 @@ DEFAULT_BABEL_RESULTS_ROOT = "/home/zhanghan/01_code/CogFlow/results_babel"
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Batch export prediction npz files, run pub evaluation, and write a markdown summary."
+    parser = argparse.ArgumentParser(description="Batch export prediction npz files, run pub evaluation, and write a markdown summary.")
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        required=True,
+        choices=["rat", "babel"],
+        help="Dataset to evaluate",
     )
-    parser.add_argument("--dataset", required=True, choices=["rat", "babel"], help="Dataset to evaluate.")
     parser.add_argument(
         "--results-root",
         type=str,
@@ -238,6 +243,7 @@ def main() -> None:
             metrics = read_metrics(metrics_json)
         else:
             before_npz = set(npz_dir.glob("*.npz")) if npz_dir.exists() else set()
+            print("npz_dir = {}".format(npz_dir))
             run_command(build_eval_cmd(args, repo_root, ckpt_path), cwd=repo_root, dry_run=args.dry_run)
             if args.dry_run:
                 continue

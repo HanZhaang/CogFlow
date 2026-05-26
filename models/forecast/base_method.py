@@ -40,8 +40,18 @@ class BaseForecastMethod(nn.Module):
         stab = metrics.get("stab", metrics.get("dissipation", zero))
         return loss_out.total, reg, cls, vel, ctrl, stab
 
-    def sample(self, batch, num_trajs: int, return_all_states: bool = False):
-        pred = self.predict(batch, num_samples=num_trajs, return_trace=return_all_states)
+    def sample(
+        self,
+        batch,
+        num_trajs: int,
+        return_all_states: bool = False,
+        collect_trace: bool = False,
+    ):
+        pred = self.predict(
+            batch,
+            num_samples=num_trajs,
+            return_trace=(return_all_states or collect_trace),
+        )
 
         samples = pred.samples
         if samples.dim() == 5:

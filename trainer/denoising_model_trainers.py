@@ -526,7 +526,13 @@ class Trainer(object):
         """
 
         # [B, K, A, T*F], [B, S, K, A, T*F], [B, S, K, A, T*F], [B, K, A]
-        pred_traj, pred_traj_at_t, t_seq, y_t_seq, pred_score = self.denoiser.sample(data, num_trajs=self.cfg.denoising_head_preds, return_all_states=self.save_samples)
+        with self.accelerator.autocast():
+            pred_traj, pred_traj_at_t, t_seq, y_t_seq, pred_score = self.denoiser.sample(
+                data,
+                num_trajs=self.cfg.denoising_head_preds,
+                return_all_states=self.save_samples,
+                collect_trace=True,
+            )
         # print("??? pred_traj shape = {}".format(pred_traj.shape))
         assert list(pred_traj.shape[2:]) == [self.cfg.agents, self.cfg.MODEL.MODEL_OUT_DIM]
 
@@ -559,7 +565,7 @@ class Trainer(object):
     def save_latent_states(self, t_seq_ls, y_t_seq_ls, y_pred_data_ls, x_data_ls, pred_score_ls, file_name):
         self.logger.info("Begin to save the denoising samples...")
 
-        if self.cfg.dataset in ['nba', 'sdd', 'eth_ucy', 'rat']:
+        if self.cfg.dataset in ['nba', 'sdd', 'eth_ucy', 'rat', 'babel']:
             keys_to_save = ['past_traj', 'fut_traj', 'past_traj_original_scale', 'fut_traj_original_scale', 'fut_traj_vel']
         else:
             raise NotImplementedError(f'Dataset [{self.cfg.dataset}] is not implemented yet.')
