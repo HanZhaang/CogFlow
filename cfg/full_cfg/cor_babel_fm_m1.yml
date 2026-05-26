@@ -77,6 +77,7 @@ MODEL:
     MODEL_OUT_DIM: 180
     REGRESSION_MLPS: [128, 256, 64, 3]
     CLASSIFICATION_MLPS: [128, 128, 1]
+    NUM_REGIMES: 3
 
     USE_PE_QUERY: True
     USE_PE_AGENT: True
@@ -110,8 +111,8 @@ denoising_head_preds         : 20
 k_preds                      : 20
 
 # ------------------------------- Optimizer Parameters ---------------------------------
-train_batch_size             : 8
-test_batch_size              : 8
+train_batch_size             : 256
+test_batch_size              : 256
 
 OPTIMIZATION:
     NUM_EPOCHS: 600

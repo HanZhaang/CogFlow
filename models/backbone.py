@@ -2,6 +2,7 @@ import numpy as np
 
 import torch
 import torch.nn as nn
+from easydict import EasyDict
 from .context_encoder import build_context_encoder
 from .motion_decoder import build_decoder
 from .motion_decoder.mtr_decoder import modulate
@@ -20,9 +21,13 @@ class MotionTransformer(nn.Module):
         self.dim = self.model_cfg.CONTEXT_ENCODER.D_MODEL # 统一的通道维（上下游对齐）
         self.config = config
         self.logger = logger
+        method_cfg = getattr(self.config, "METHOD", EasyDict())
+        self.decoder_name = method_cfg.get("DECODER", getattr(self.config, "decoder_name", "moflow_structured"))
+        self.use_mlp_decoder = self.decoder_name == "mlp"
         use_pre_norm = self.model_cfg.get('USE_PRE_NORM', False)
         self.ablation_mode = self.config.CNSDE
         self.time_chunk_size = int(self.model_cfg.get('DECODER_TIME_CHUNK', 0))
+        self.num_regimes = int(self.model_cfg.get('NUM_REGIMES', self.config.get('num_regime', 3)))
         assert not use_pre_norm, "Pre-norm is not supported in this model"
         self.T_f = self.config.get('future_frames', 0)
         self.dt = self.config.get('dt', 0)
@@ -77,7 +82,7 @@ class MotionTransformer(nn.Module):
             self.neural_sde = ControlledSSLSDE(
                 z_dim=self.model_cfg.get('COG_D_Z', 0),
                 stim_dim=self.model_cfg.get('COND_D_CUE', 0),
-                num_regimes=3,
+                num_regimes=self.num_regimes,
                 num_bases=16,
                 hidden_dim=self.dim,
                 init_scale=0.1,
@@ -152,7 +157,7 @@ class MotionTransformer(nn.Module):
             nn.Linear(dim_decoder, self.model_cfg.MODEL_OUT_DIM),
         )
 
-        self.motion_decoder = build_decoder(self.model_cfg.MOTION_DECODER, use_pre_norm)
+        self.motion_decoder = nn.Identity() if self.use_mlp_decoder else build_decoder(self.model_cfg.MOTION_DECODER, use_pre_norm)
 
         self.reg_head = build_mlps(c_in=self.dim, mlp_channels=self.model_cfg.REGRESSION_MLPS, ret_before_act=True, without_norm=True)
         self.cls_head = build_mlps(c_in=dim_decoder, mlp_channels=self.model_cfg.CLASSIFICATION_MLPS, ret_before_act=True, without_norm=True)
@@ -163,6 +168,7 @@ class MotionTransformer(nn.Module):
         params_decoder = sum(p.numel() for p in self.motion_decoder.parameters())
         params_total = sum(p.numel() for p in self.parameters())
         params_other = params_total - params_encoder - params_decoder
+        logger.info(f"CogFlow decoder: {self.decoder_name}")
         logger.info("Total parameters: {:,}, Encoder: {:,}, Decoder: {:,}, Other: {:,}".format(
             params_total, params_encoder, params_decoder, params_other
         ))
@@ -433,10 +439,13 @@ class MotionTransformer(nn.Module):
             denoiser_x = rearrange(denoiser_x, 'b k a t d -> b k a (t d)')
         else:
             query_token = self.post_pe_cat_mlp(self.apply_PE(emb_fusion, k_pe_batch, a_pe_batch)) 								# [B, K, A, D]
-            readout_token = self.motion_decoder(query_token, t_emb)													# [B, K, A, D]
+            if self.use_mlp_decoder:
+                denoiser_x = self.reg_head(query_token)  										# [B, K, A, F * D]
+            else:
+                readout_token = self.motion_decoder(query_token, t_emb)													# [B, K, A, D]
 
-            # （8）读出：回归分支输出 T*D，分类分支输出 [B,K,A] 的打分
-            denoiser_x = self.reg_head(readout_token)  										# [B, K, A, F * D]
+                # （8）读出：回归分支输出 T*D，分类分支输出 [B,K,A] 的打分
+                denoiser_x = self.reg_head(readout_token)  										# [B, K, A, F * D]
         # print("denoiser_x shape = {}".format(denoiser_x.shape))
 
         # denoiser_cls = self.cls_head(readout_token).squeeze(-1) 						# [B, K, A]
@@ -461,6 +470,7 @@ class IMLETransformer(nn.Module):
         assert not use_pre_norm, "Pre-norm is not supported in this model"
         self.T_f = self.cfg.get('future_frames', 0)
         self.dt = self.cfg.get('dt', 0)
+        self.num_regimes = int(self.model_cfg.get('NUM_REGIMES', self.cfg.get('num_regime', 3)))
 
         # （1）上下文编码器：把历史轨迹/邻居信息编码成每个 agent 的上下文向量
         self.context_encoder = build_context_encoder(self.model_cfg.CONTEXT_ENCODER, use_pre_norm, config.device)
@@ -477,7 +487,7 @@ class IMLETransformer(nn.Module):
         self.neural_sde = ControlledSSLSDE(
             z_dim=self.model_cfg.get('COG_D_Z', 0),
             stim_dim=self.model_cfg.get('COND_D_CUE', 0),
-            num_regimes=3,
+            num_regimes=self.num_regimes,
             num_bases=16,
             hidden_dim=self.dim,
             init_scale=0.1,

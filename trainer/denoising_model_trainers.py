@@ -531,7 +531,7 @@ class Trainer(object):
                 data,
                 num_trajs=self.cfg.denoising_head_preds,
                 return_all_states=self.save_samples,
-                collect_trace=True,
+                # collect_trace=True,
             )
         # print("??? pred_traj shape = {}".format(pred_traj.shape))
         assert list(pred_traj.shape[2:]) == [self.cfg.agents, self.cfg.MODEL.MODEL_OUT_DIM]

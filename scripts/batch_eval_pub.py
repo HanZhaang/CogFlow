@@ -129,6 +129,7 @@ def build_eval_cmd(args: argparse.Namespace, repo_root: Path, ckpt_path: Path) -
         cmd.extend(["--num_workers", str(args.num_workers)])
     if args.eval_on_train:
         cmd.append("--eval_on_train")
+    print(cmd)
     return cmd
 
 
