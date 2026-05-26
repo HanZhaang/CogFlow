@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List
@@ -16,6 +17,7 @@ except ModuleNotFoundError as exc:
     ) from exc
 from easydict import EasyDict
 
+sys.path.append(str(Path(__file__).resolve().parents[1]))
 from models.model_registry import build_network
 from utils.config import Config
 

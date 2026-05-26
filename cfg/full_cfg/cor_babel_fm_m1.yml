@@ -16,7 +16,7 @@ data_dir: './data/babel_3060'
 overfit: False
 n_train: 9409
 n_val : 2688
-n_test: 1345
+n_test: 2688
 rotate: False
 data_norm: 'min_max'
 
@@ -110,8 +110,8 @@ denoising_head_preds         : 20
 k_preds                      : 20
 
 # ------------------------------- Optimizer Parameters ---------------------------------
-train_batch_size             : 48
-test_batch_size              : 48
+train_batch_size             : 8
+test_batch_size              : 8
 
 OPTIMIZATION:
     NUM_EPOCHS: 600
