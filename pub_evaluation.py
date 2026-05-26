@@ -204,11 +204,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     bundle = load_pred_fut(args.npz_path)
-    # pred = bundle["pred"]
-    # fut = bundle["fut"]
-    pred = np.load("/root/CogFlow/visualize/trajs/drift_arr2_best/pred_trajs.npy")
-    fut = np.load("/root/CogFlow/visualize/trajs/drift_arr2_best/fut_gt_trajs.npy")
-
+    pred = bundle["pred"]
+    fut = bundle["fut"]
     total_frames = pred.shape[-2]
     horizons = args.horizons if args.horizons else _default_horizons(total_frames)
     performance = evaluate_predictions(pred, fut, horizons=horizons)

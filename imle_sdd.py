@@ -268,16 +268,16 @@ def build_network(cfg, args, logger):
             if 'context_encoder' in key:
                 if key.startswith('model.'):
                     key = key.replace('model.', '')
-                assert key in model.state_dict(), f"Key {key} not in model state dict."
-                model.state_dict()[key].copy_(val)
+                if key in model.state_dict():
+                    model.state_dict()[key].copy_(val)
 
             if 'motion_decoder' in key:
                 if key.startswith('model.'):
                     key = key.replace('model.', '')
                 if 'adaLN' in key:
                     continue
-                assert key in model.state_dict(), f"Key {key} not in model state dict."
-                model.state_dict()[key].copy_(val)
+                if key in model.state_dict():
+                    model.state_dict()[key].copy_(val)
 
         logger.info("The pretrained encoder and decoder have been loaded.")
 
