@@ -1,7 +1,6 @@
 import copy
 import torch.nn as nn
-import torch.nn.functional as F
-from einops import rearrange, repeat
+from einops import rearrange
 
 import torch
 
@@ -30,12 +29,15 @@ class MTRDecoder(nn.Module):
         self.ablation_mode = config.get('CNSDE', 'm1')
         self.self_attn_K = nn.ModuleList([])
         self.self_attn_A = nn.ModuleList([])
-        template_encoder = nn.TransformerEncoderLayer(d_model=config.D_MODEL, 
-                                                      dropout=config.get('DROPOUT_OF_ATTN', 0.1),
-                                                      nhead=config.NUM_ATTN_HEAD, 
-                                                      dim_feedforward=config.D_MODEL * 4, 
-                                                      norm_first=use_pre_norm,
-                                                      batch_first=True)
+        dropout = config.get('DROPOUT_OF_ATTN', 0.1)
+        template_encoder = nn.TransformerEncoderLayer(
+            d_model=config.D_MODEL,
+            dropout=dropout,
+            nhead=config.NUM_ATTN_HEAD,
+            dim_feedforward=config.D_MODEL * 2,
+            norm_first=use_pre_norm,
+            batch_first=True,
+        )
         self.use_adaln = use_adaln
 
         if use_adaln:
@@ -45,7 +47,7 @@ class MTRDecoder(nn.Module):
             self.t_adaLN = nn.ModuleList([])
 
         for _ in range(self.num_blocks):
-            self.self_attn_K.append(copy.deepcopy(template_encoder))
+            self.self_attn_K.append(ProposalMixer(config.D_MODEL, dropout))
             self.self_attn_A.append(copy.deepcopy(template_encoder))
 
             if use_adaln:
@@ -92,4 +94,27 @@ class MTRDecoder(nn.Module):
                 cur_query = rearrange(cur_query, '(b k) a d -> b k a d', b=B, a=A, k=K)
 
         return cur_query
+
+
+class ProposalMixer(nn.Module):
+    def __init__(self, d_model: int, dropout: float):
+        super().__init__()
+        self.norm = nn.LayerNorm(d_model)
+        self.mix = nn.Sequential(
+            nn.Linear(d_model * 2, d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_model, d_model),
+            nn.Dropout(dropout),
+        )
+        self.gate = nn.Sequential(
+            nn.Linear(d_model * 2, d_model),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        h = self.norm(x)
+        pooled = h.mean(dim=1, keepdim=True).expand(-1, h.shape[1], -1)
+        mix_in = torch.cat((h, pooled), dim=-1)
+        return x + self.gate(mix_in) * self.mix(mix_in)
     

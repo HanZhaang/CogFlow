@@ -583,7 +583,7 @@ def simulate_sde_paths(
         u_t = u_seq_encoded[:, t, :]  # [B, stim_dim]
         u_prev = u_seq_encoded[:, t - 1, :] if t > 0 else u_t  # t=0 => du=0
         states.append(z)
-        drift = sde.drift(z, u_t, dt=dt, u_prev=u_prev)      # [B, z_dim]
+        drift = sde.drift(z, u_t, dt=dt, u_prev=u_prev, clip_udot=10)      # [B, z_dim]
         sigma = sde.diffusion(z)       # [B, z_dim]
         noise = torch.randn(B, z_dim, device=device, dtype=dtype)  # dW_t ~ N(0, dt)
         z = z + drift * dt + sigma * sqrt_dt * noise

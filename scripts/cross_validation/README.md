@@ -26,10 +26,10 @@
 
 ---
 
-CUDA_VISIBLE_DEVICES=3 python scripts/cross_subject/00_build_rat_manifest.py  
+CUDA_VISIBLE_DEVICES=3 python scripts/cross_validation/00_build_rat_manifest.py  
 ## 2. Script 00：从 trial_index 构建 manifest
 
-脚本：`scripts/cross_subject/00_build_rat_manifest.py`
+脚本：`scripts/cross_validation/00_build_rat_manifest.py`
 
 ### 2.1 输入
 
@@ -60,7 +60,7 @@ CUDA_VISIBLE_DEVICES=3 python scripts/cross_subject/00_build_rat_manifest.py
 
 ### 2.3 输出
 
-默认输出根目录：`outputs/cross_subject`
+默认输出根目录：`outputs/cross_validation`
 
 核心输出（由 trial npz 解包而来）：
 
@@ -95,12 +95,12 @@ CUDA_VISIBLE_DEVICES=3 python scripts/cross_subject/00_build_rat_manifest.py
 
 ## 3. Script 01：生成 LORO 划分
 
-脚本：`scripts/cross_subject/01_make_loro_splits.py`
+脚本：`scripts/cross_validation/01_make_loro_splits.py`
 
 ### 3.1 输入
 
 - `--manifest`：Script 00 生成的 `manifest.csv`
-- `--out-dir`：输出目录（默认 `outputs/cross_subject/splits`）
+- `--out-dir`：输出目录（默认 `outputs/cross_validation/splits`）
 - `--min-trials-per-rat`：参与 LORO 的最小试验数阈值
 - `--only-rats`：只对指定 rat 生成 split（逗号分隔）
 - `--strict`：若某 rat 不满足阈值则直接报错
@@ -195,9 +195,8 @@ python scripts/cross_validation/02_fit_loro_models.py \
 ```bash
 python scripts/cross_validation/02_fit_loro_models.py \
   --split-dir outputs/cross_validation/splits \
-  --fit-motion \
-  --flow-dir outputs/cross_validation/flow_by_rat \
-  --motion-out-dir results_rat/cross_validattion
+  --motion-out-dir results_rat/cross_validattion \
+  --cfg-template cfg/full_cfg/rat
 ```
 
 若已有 `train.py` 产出的权重（如 `checkpoints/loro_*/best.pt`），可跳过重训：

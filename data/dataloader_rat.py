@@ -9,6 +9,13 @@ from utils.normalization import normalize_min_max, unnormalize_min_max, normaliz
 import torch
 from utils.utils import rotate_trajs_x_direction
 
+
+def _first_existing_path(*paths):
+    for path in paths:
+        if os.path.exists(path):
+            return path
+    return paths[0]
+
 def seq_collate_rat(batch):
     (past_traj, fut_traj, past_traj_orig, fut_traj_orig, traj_vel, hist_feats, hist_cond_cue, fut_cond_cue) = zip(*batch)
     
@@ -103,8 +110,19 @@ class RatDatasetMinMax(Dataset):
                 data_root = os.path.join(data_dir, 'rat_ver2_smooth_3060/rat_pose_train.npy')
                 cmd_root = os.path.join(data_dir, 'rat_ver2_smooth_3060/rat_stim_train.npy')
             else:
-                data_root = os.path.join(data_dir, 'rat_ver2_smooth_3060/rat_pose_test.npy')
-                cmd_root = os.path.join(data_dir, 'rat_ver2_smooth_3060/rat_stim_test.npy')
+<<<<<<< HEAD
+                data_root = os.path.join(data_dir, 'rat_ver2_smooth_3060/rat_pose_val.npy')
+                cmd_root = os.path.join(data_dir, 'rat_ver2_smooth_3060/rat_stim_val.npy')
+=======
+                data_root = _first_existing_path(
+                    os.path.join(data_dir, 'rat_ver2_smooth_3060/rat_pose_test.npy'),
+                    os.path.join(data_dir, 'rat_ver2_smooth_3060/rat_pose_test.npy'),
+                )
+                cmd_root = _first_existing_path(
+                    os.path.join(data_dir, 'rat_ver2_smooth_3060/rat_stim_test.npy'),
+                    os.path.join(data_dir, 'rat_ver2_smooth_3060/rat_stim_test.npy'),
+                )
+>>>>>>> origin
         else:
             data_root = os.path.join(data_dir, 'rat_ver2_smooth_3060/rat_pose_train.npy')
             cmd_root = os.path.join(data_dir, 'rat_ver2_smooth_3060/rat_stim_train.npy')
@@ -188,12 +206,12 @@ class RatDatasetMinMax(Dataset):
 
         # 归一化（保持与 NBA 版本一致）
         if self.data_norm == 'min_max':
-            abs_n = self.z(past_abs, torch.tensor(cfg.stats['abs_mean']), torch.tensor(cfg.stats['abs_std']))
-            rel_n = self.z(past_rel, torch.tensor(cfg.stats['rel_mean']), torch.tensor(cfg.stats['rel_std']))
-            vel_n = self.z(past_vel, torch.tensor(cfg.stats['vel_mean']), torch.tensor(cfg.stats['vel_std']))
+            abs_n = self.z(past_abs, torch.as_tensor(cfg.stats['abs_mean']), torch.as_tensor(cfg.stats['abs_std']))
+            rel_n = self.z(past_rel, torch.as_tensor(cfg.stats['rel_mean']), torch.as_tensor(cfg.stats['rel_std']))
+            vel_n = self.z(past_vel, torch.as_tensor(cfg.stats['vel_mean']), torch.as_tensor(cfg.stats['vel_std']))
 
             self.past_traj = torch.cat([abs_n, rel_n, vel_n], dim=-1)  # [N,V,T_h, 2+2+2=6]
-            self.fut_traj  = self.z(fut_traj, torch.tensor(cfg.stats['fut_mean']), torch.tensor(cfg.stats['fut_std']))
+            self.fut_traj  = self.z(fut_traj, torch.as_tensor(cfg.stats['fut_mean']), torch.as_tensor(cfg.stats['fut_std']))
         else:
             # 也可做 sqrt/log 标准化：略
             self.past_traj = past_traj

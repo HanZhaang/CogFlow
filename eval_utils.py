@@ -47,6 +47,7 @@ def add_eval_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument('--variant', type=str, help='Method variant, e.g. gru or transformer.')
     parser.add_argument('--decoder', type=str, choices=['moflow_structured', 'mlp'], help='Decoder backend override.')
     parser.add_argument('--action_fusion', type=str, choices=['none', 'cross_attention'], help='Action fusion backend override.')
+    parser.add_argument('--num-regime', type=int, default=None, help='ControlledSSLSDE regime count override.')
     parser.add_argument('--enable_dissipativity', action='store_true', help='Enable dissipativity constraint.')
     parser.add_argument('--dissipativity_weight', type=float, default=None, help='Dissipativity weight override.')
     return parser

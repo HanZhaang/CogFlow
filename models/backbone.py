@@ -27,6 +27,7 @@ class MotionTransformer(nn.Module):
         use_pre_norm = self.model_cfg.get('USE_PRE_NORM', False)
         self.ablation_mode = self.config.CNSDE
         self.time_chunk_size = int(self.model_cfg.get('DECODER_TIME_CHUNK', 0))
+        self.num_regimes = int(self.model_cfg.get('NUM_REGIMES', self.config.get('num_regime', 3)))
         assert not use_pre_norm, "Pre-norm is not supported in this model"
         self.T_f = self.config.get('future_frames', 0)
         self.dt = self.config.get('dt', 0)
@@ -81,7 +82,7 @@ class MotionTransformer(nn.Module):
             self.neural_sde = ControlledSSLSDE(
                 z_dim=self.model_cfg.get('COG_D_Z', 0),
                 stim_dim=self.model_cfg.get('COND_D_CUE', 0),
-                num_regimes=3,
+                num_regimes=self.num_regimes,
                 num_bases=16,
                 hidden_dim=self.dim,
                 init_scale=0.1,
@@ -90,6 +91,12 @@ class MotionTransformer(nn.Module):
             self.z_seq_proj =  nn.Linear(self.model_cfg.get('COG_D_Z', 0), self.dim)
             self.z_seq_gamma = nn.Linear(self.dim, self.dim)
             self.z_seq_beta = nn.Linear(self.dim, self.dim)
+            self.temporal_readout_mlp = nn.Sequential(
+                nn.Linear(self.dim, self.dim),
+                nn.LayerNorm(self.dim),
+                nn.ReLU(),
+                nn.Linear(self.dim, self.dim),
+            )
 
             in_fuse = (self.dim            # encoder_out
             + (self.dim*1)      # time_dim
@@ -224,32 +231,26 @@ class MotionTransformer(nn.Module):
 
     def _decode_m2_with_time_chunk(
         self,
-        emb_fusion: torch.Tensor,
+        query_token: torch.Tensor,
         gamma: torch.Tensor,
         beta: torch.Tensor,
-        k_pe: torch.Tensor,
-        a_pe: torch.Tensor,
         t_emb: torch.Tensor,
     ) -> torch.Tensor:
+        base_readout = self.motion_decoder(query_token, t_emb).unsqueeze(3)
         chunk_size = self.time_chunk_size
         if chunk_size <= 0 or self.T_f <= chunk_size:
-            query_token = self.post_pe_cat_mlp(
-                self.apply_PE(emb_fusion.unsqueeze(3) * (1 + gamma) + beta, k_pe, a_pe)
+            time_token = self.temporal_readout_mlp(
+                base_readout * (1 + gamma[:, None, None, :, :]) + beta[:, None, None, :, :]
             )
-            if self.use_mlp_decoder:
-                return self.reg_head(query_token)
-            return self.reg_head(self.motion_decoder(query_token, t_emb))
+            return self.reg_head(time_token)
 
         outputs = []
-        base_fusion = emb_fusion.unsqueeze(3)
         for start in range(0, self.T_f, chunk_size):
             end = min(start + chunk_size, self.T_f)
-            fused_chunk = base_fusion * (1 + gamma[:, :, :, start:end]) + beta[:, :, :, start:end]
-            query_chunk = self.post_pe_cat_mlp(self.apply_PE(fused_chunk, k_pe, a_pe))
-            if self.use_mlp_decoder:
-                outputs.append(self.reg_head(query_chunk))
-            else:
-                outputs.append(self.reg_head(self.motion_decoder(query_chunk, t_emb)))
+            time_chunk = self.temporal_readout_mlp(
+                base_readout * (1 + gamma[:, None, None, start:end, :]) + beta[:, None, None, start:end, :]
+            )
+            outputs.append(self.reg_head(time_chunk))
         return torch.cat(outputs, dim=3)
     
     def get_z_rollout(self, x_data, return_terms: bool = False):
@@ -376,10 +377,8 @@ class MotionTransformer(nn.Module):
             else:
                 z_seq, _ = rollout_out
             z_frame = self.z_seq_proj(z_seq)
-            z_frame_bka = z_frame[:, None, None, :, :].expand(B, K, A, self.T_f, self.dim)
-
-            gamma = self.z_seq_gamma(z_frame_bka)  # [B,K,A,T_f,D]
-            beta = self.z_seq_beta(z_frame_bka)  # [B,K,A,T_f,D]
+            gamma = self.z_seq_gamma(z_frame)  # [B,T_f,D]
+            beta = self.z_seq_beta(z_frame)  # [B,T_f,D]
             
         # 到这里位置没有问题，下面如何进行特征融合？
         
@@ -430,14 +429,11 @@ class MotionTransformer(nn.Module):
         
         # # 11-24 尝试在此处融合，效果显著，出于对比考虑修改
         if self.ablation_mode == "m2":
-            k_pe_batch = k_pe_batch.unsqueeze(3)  # [1, K, 1, 1, D]
-            a_pe_batch = a_pe_batch.unsqueeze(3)  # [1, 1, A, 1, D]
+            query_token = self.post_pe_cat_mlp(self.apply_PE(emb_fusion, k_pe_batch, a_pe_batch))
             denoiser_x = self._decode_m2_with_time_chunk(
-                emb_fusion=emb_fusion,
+                query_token=query_token,
                 gamma=gamma,
                 beta=beta,
-                k_pe=k_pe_batch,
-                a_pe=a_pe_batch,
                 t_emb=t_emb,
             )
             denoiser_x = rearrange(denoiser_x, 'b k a t d -> b k a (t d)')
@@ -474,6 +470,7 @@ class IMLETransformer(nn.Module):
         assert not use_pre_norm, "Pre-norm is not supported in this model"
         self.T_f = self.cfg.get('future_frames', 0)
         self.dt = self.cfg.get('dt', 0)
+        self.num_regimes = int(self.model_cfg.get('NUM_REGIMES', self.cfg.get('num_regime', 3)))
 
         # （1）上下文编码器：把历史轨迹/邻居信息编码成每个 agent 的上下文向量
         self.context_encoder = build_context_encoder(self.model_cfg.CONTEXT_ENCODER, use_pre_norm, config.device)
@@ -490,7 +487,7 @@ class IMLETransformer(nn.Module):
         self.neural_sde = ControlledSSLSDE(
             z_dim=self.model_cfg.get('COG_D_Z', 0),
             stim_dim=self.model_cfg.get('COND_D_CUE', 0),
-            num_regimes=3,
+            num_regimes=self.num_regimes,
             num_bases=16,
             hidden_dim=self.dim,
             init_scale=0.1,
