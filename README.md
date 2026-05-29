@@ -1,283 +1,176 @@
-# MoFlow-IMLE
-![visitors](https://visitor-badge.laobi.icu/badge?page_id=felix-yuxiang/MoFlow)
-[![arXiv](https://img.shields.io/badge/arXiv-Paper-red)](https://arxiv.org/abs/2503.09950)
-[![Project Webpage](https://img.shields.io/badge/Project_Page-Website-green?logo=googlechrome&logoColor=white)](https://moflow-imle.github.io/)
-[![HF data](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Checkpoints-blue)](https://huggingface.co/fyxfelixfu/moflow/tree/main)
+# CogFlow Public Release
 
-The **official** PyTorch implementation of CVPR'25 paper named "MoFlow: One-Step Flow Matching for Human Trajectory Forecasting via Implicit Maximum Likelihood Estimation Distillation"
+This release focuses on the public CogFlow training and evaluation pipeline for two datasets only:
 
+- `rat`
+- `babel`
 
+The default public settings use:
 
-## 📢 News
-- [2025/02] 🎉 Paper accepted to CVPR 2025!
-- [2025/03] 🚀 Code repository is now public
-- [2025/03] 📊 Preprocessed datasets are available in the `./data/[datasets]` folder
-- [2025/03] 🔥 Model checkpoints and samples from MoFlow of NBA are up on Hugging Face
-- [2025/03] 🔥 Model checkpoints of MoFlow on ETH-UCY and SDD datasets are up on Hugging Face 
+- `historical_pre_film` decoder style
+- `encoded` SDE control style
 
-## 📝 Overview
+That means the released default model path is:
 
-![MoFlow-IMLE diagram](images/moflow-imle.png)
+- `cmd encoder + old FiLM / old structured decoder`
 
-Human trajectory forecasting is a challenging task that involves two key objectives:
-1. Predicting future trajectories with high precision.
-2. Generating diverse future movements that capture the inherent uncertainty in human decision-making.
+## What Is Included
 
-We address this challenge by introducing MoFlow, a novel Motion prediction conditional Flow matching model that generates K-shot future trajectories for all agents in a given scene. Our key contributions include:
+Three public presets are supported:
 
-- A novel flow matching loss function that ensures both accuracy and diversity in trajectory predictions
-- An innovative distillation method for flow models using Implicit Maximum Likelihood Estimation (IMLE)
-- A one-step flow matching approach that significantly reduces computational complexity
+1. `rat`: standard rat training and evaluation
+2. `babel`: standard babel training and evaluation
+3. `rat_bnd`: rat training and evaluation with `L_bnd`
 
-Our MoFlow can generate diverse trajectories that are physically and socially plausible. Moreover, our one-step student model IMLE is **100** times faster than the teacher flow model during sampling!
+The recommended public entry points are:
 
-## Docs
+- `train.py`
+- `eval.py`
+- `pub_evaluation.py`
 
-- New unified training/evaluation usage: [docs/USAGE_GUIDE_ZH.md](docs/USAGE_GUIDE_ZH.md)
-- `train.py` call flow and internal function routing: [docs/TRAIN_CALL_FLOW_ZH.md](docs/TRAIN_CALL_FLOW_ZH.md)
-- Compute-cost benchmark usage: [docs/COMPUTE_BENCHMARK_ZH.md](docs/COMPUTE_BENCHMARK_ZH.md)
-
-## 🛠️ Environment Setup
+## Environment
 
 ```bash
-# Create a new conda environment
-conda create -n moflow python=3.11
-conda activate moflow
-
-# Install PyTorch (adjust version based on your CUDA version)
-conda install pytorch torchvision torchaudio pytorch-cuda=11.8 -c pytorch -c nvidia
-
-# Install other dependencies
+conda create -n cogflow python=3.11 -y
+conda activate cogflow
 pip install -r requirements.txt
 ```
 
-## 📊 Datasets
+Install a PyTorch build that matches your CUDA runtime before running training or evaluation.
 
-This project supports three major trajectory datasets:
+## Data And Weights
 
-### 1. NBA SportVU Dataset
-- **Description**: High-resolution basketball player trajectories from NBA games
-- **Contents**: Detailed player positions and movement data
-- **Location**: Preprocessed data available in `data/nba/`
-- **Source**: Compatible with datasets used in [LED](https://github.com/MediaBrain-SJTU/LED) and [GroupNet](https://github.com/MediaBrain-SJTU/GroupNet)
-- We select the first 32500 scenes from the training data and 12500 scenes from the test data. The original datasets can be found in this [Google Drive](https://drive.google.com/drive/folders/1Uy8-WvlCp7n3zJKiEX0uONlEcx2u3Nnx)
+Download the public dataset packages and weight packages from your release assets, then place them in the following locations.
 
-### 2. ETH-UCY Dataset
-- **Description**: Pedestrian trajectories across 5 diverse scenes (ETH, Hotel, Univ, Zara1, and Zara2)
-- **Location**: Preprocessed data available in `data/eth_ucy/`
-- **Sources**:
-  - Based on the original ETH-UCY dataset used in [SocialGAN](https://github.com/agrimgupta92/sgan)
-  - Dataset files courtesy of [EigenTrajectory](https://github.com/InhwanBae/EigenTrajectory)
+### Rat dataset
 
-- **Note**: This version differs from the one used in LED. You can specify `--data_source` to select the version of your interest.
+Expected files:
 
-### 3. Stanford Drone Dataset (SDD)
-- **Description**: Diverse trajectory data from a university campus environment
-- **Contents**: Multi-agent trajectories including pedestrians, cyclists, and vehicles
-- **Location**: Preprocessed data available in `data/sdd/`
-- **Versions**:
-  - Primary version sourced from [TUTR](https://github.com/lssiair/TUTR)
-  - Additional experiments conducted using [NSP](https://github.com/realcrane/Human-Trajectory-Prediction-via-Neural-Social-Physics) version
+```text
+data/rat/rat_ver2_smooth_3060/rat_pose_train.npy
+data/rat/rat_ver2_smooth_3060/rat_stim_train.npy
+data/rat/rat_ver2_smooth_3060/rat_pose_val.npy
+data/rat/rat_ver2_smooth_3060/rat_stim_val.npy
+```
 
+Optional aliases also supported for evaluation:
 
-## 🗂️ Project Structure
+```text
+data/rat/rat_ver2_smooth_3060/rat_pose_test.npy
+data/rat/rat_ver2_smooth_3060/rat_stim_test.npy
+```
 
-- **`README.md`**: Project documentation and overview.
-- **`cfg/`**: Configuration files for different datasets:
-  - `eth_ucy/`, `nba/`, `sdd/`: Each contains `cor_fm.yml` and `imle.yml` for specific model configurations.
-- **`data/`**: Dataset-related files and scripts:
-  - **Data loaders**: `dataloader_eth_ucy.py`, `dataloader_nba.py`, `dataloader_sdd.py`.
-  - **`eth_ucy/`**: Extensive subdirectories (`LED`, `original`, `raw`, etc.) with `.npy` and `.pkl` files for train/test splits (e.g., `eth_data_train.npy`, `zara1_test.pkl`) and a download script (`download_eth_ucy_dataset.sh`).
-  - **`nba/`**: Contains `nba_train.npy` and `nba_test.npy`.
-  - **`sdd/`**: Includes `sdd_train.pkl`, `sdd_test.pkl`, and NSP variants (`sdd_nsp_train.pkl`).
-  - **`store_pickle_eth_files.py`**: Utility for processing ETH dataset files.
-- **`eval_*.py`**: Evaluation scripts for ETH (`eval_eth.py`, `eval_imle_eth.py`), NBA (`eval_nba.py`, `eval_imle_nba.py`), and SDD (`eval_sdd.py`).
-- **`fm_*.py`**: Flow-matching scripts for ETH (`fm_eth.py`), NBA (`fm_nba.py`), and SDD (`fm_sdd.py`).
-- **`imle_*.py`**: IMLE scripts for ETH (`imle_eth.py`), NBA (`imle_nba.py`), and SDD beetlejuice(`imle_sdd.py`).
-- **`images/`**: Visual assets, including `moflow-architecture.png` and `moflow-imle.png`.
-- **`models/`**: Model definitions and utilities:
-  - **Core files**: `backbone.py`, `backbone_eth_ucy.py`, `flow_matching.py`, `imle.py`.
-  - **Submodules**: `context_encoder/` (e.g., `eth_encoder.py`), `motion_decoder/` (e.g., `mtr_decoder.py`), `utils/` (e.g., `common_layers.py`).
-- **`requirements.txt`**: Project dependencies.
-- **`trainer/`**: Training logic in `denoising_model_trainers.py` and `imle_trainers.py`.
-- **`utils/`**: Helper scripts like `config.py`, `normalization.py`, and `utils.py`.
+### Babel dataset
 
-This project incorporates multiple datasets (ETH/UCY, NBA, SDD), model implementations (Flow Matching MoFlow and IMLE), and comprehensive evaluation and training pipelines.
+Expected files:
 
+```text
+data/babel/babel_train.npy
+data/babel/babel_train_cmd.npy
+data/babel/babel_val.npy
+data/babel/babel_val_cmd.npy
+data/babel/babel_test.npy
+data/babel/babel_test_cmd.npy
+```
 
+### Public checkpoints
 
-## 🚀 Usage
-<img src="images/moflow-architecture.png" alt="MoFlow-IMLE architecture" width="50%">
+Place downloaded checkpoints here:
 
-Our teacher MoFlow model and student IMLE model share almost the same architecture. However, the student IMLE model does not require time conditioning, eliminating the neural network component that processes it. We can load the weights from our pre-trained teacher model via `--load_pretrained` to accelerate the training further.
+```text
+weights/rat/checkpoint_best.pt
+weights/babel/checkpoint_best.pt
+weights/rat_bnd/checkpoint_best.pt
+```
 
-### 🎯 Training and Evaluation Pipeline
+## Train
 
-For each dataset, we need to train our MoFlow teacher model first:
+### Default rat
 
-1. **Teacher Model Training**
 ```bash
-### NBA dataset
-python fm_nba.py --exp <exp_name> --tied_noise --fm_in_scaling --checkpt_freq 5 --batch_size 192 --init_lr 1e-3
-
-### ETH dataset
-python3 fm_eth.py --exp <exp_name> --rotate --rotate_time_frame 6 --subset eth --tied_noise --fm_in_scaling --checkpt_freq 1 --batch_size 32 --init_lr 1e-4 
-python3 fm_eth.py --exp <exp_name> --rotate --rotate_time_frame 6 --subset hotel --tied_noise --fm_in_scaling --checkpt_freq 1 --batch_size 48 --init_lr 1e-4 
-python3 fm_eth.py --exp <exp_name> --rotate -rotate_time_frame 6 --subset univ --tied_noise --fm_in_scaling --checkpt_freq 1 --batch_size 48 --init_lr 1e-4 
-python3 fm_eth.py --exp <exp_name> --rotate --rotate_time_frame 6 --subset zara1 --tied_noise --fm_in_scaling --checkpt_freq 1 --batch_size 32 --init_lr 1e-4 
-python3 fm_eth.py --exp <exp_name> --rotate --rotate_time_frame 6 --subset zara2 --tied_noise --fm_in_scaling --checkpt_freq 1 --batch_size 32 --init_lr 1e-4 
-
-### SDD dataset
-python fm_sdd.py --exp <exp_name> --rotate --rotate_time_frame 6 --tied_noise --fm_in_scaling --checkpt_freq 1 --batch_size 48 --init_lr 1e-4 --perturb_ctx 0.03
+python train.py --cfg cfg/release/rat.yml --exp rat_release
 ```
 
-2. **Teacher Model Sampling**
+### Default babel
+
 ```bash
-### NBA dataset
-python3 eval_nba.py --ckpt_path <path_to_nba_teacher_checkpoint> \
---batch_size 1000 --sampling_steps 100 --solver lin_poly --lin_poly_p 5 --lin_poly_long_step 1000 --save_samples --eval_on_train
-
-### ETH dataset
-python3 eval_eth.py \
---ckpt_path <path_to_eth_teacher_checkpoint> \
---subset eth --rotate --rotate_time_frame 6 \
---batch_size 1000 --sampling_steps 100 --solver lin_poly --lin_poly_p 5 --lin_poly_long_step 1000 --save_samples --eval_on_train
-
-python3 eval_eth.py \
---ckpt_path <path_to_hotel_teacher_checkpoint> \
---subset hotel --rotate --rotate_time_frame 6 \
---batch_size 1000 --sampling_steps 100 --solver lin_poly --lin_poly_p 5 --lin_poly_long_step 1000 --save_samples --eval_on_train
-
-python3 eval_eth.py \
---ckpt_path <path_to_univ_teacher_checkpoint> \
---subset univ --rotate --rotate_time_frame 6 \
---batch_size 1000 --sampling_steps 100 --solver lin_poly --lin_poly_p 5 --lin_poly_long_step 1000 --save_samples --eval_on_train
-
-python3 eval_eth.py \
---ckpt_path <path_to_zara1_teacher_checkpoint> \
---subset zara1 --rotate --rotate_time_frame 6 \
---batch_size 1000 --sampling_steps 100 --solver lin_poly --lin_poly_p 5 --lin_poly_long_step 1000 --save_samples --eval_on_train
-
-python3 eval_eth.py \
---ckpt_path <path_to_zara2_teacher_checkpoint> \
---subset zara2 --rotate --rotate_time_frame 6 \
---batch_size 1000 --sampling_steps 100 --solver lin_poly --lin_poly_p 5 --lin_poly_long_step 1000 --save_samples --eval_on_train
-
-### SDD dataset
-python eval_sdd.py --ckpt_path <path_to_sdd_teacher_checkpoint> \
---rotate --rotate_time_frame 6 --batch_size 1000 --sampling_steps 100 --solver lin_poly --lin_poly_p 5 --lin_poly_long_step 1000 --save_samples --eval_on_train
+python train.py --cfg cfg/release/babel.yml --exp babel_release
 ```
 
+### Rat with `L_bnd`
 
-
-Let's train our IMLE student model now. First, we need to move the pickle files containing the teacher MoFlow samples from `[results_dir]/samples/` to `./data/[datasets]/imle/`. Completing this step is **essential** to the successful training of the student model. 
-
-3. **Student Model Training**
 ```bash
-### NBA dataset
-python3 imle_nba.py --exp <exp_name> \
---checkpt_freq 1 --epochs 50 --batch_size 48 --init_lr 1e-3 --num_to_gen 20 \
---load_pretrained --ckpt_path <path_to_nba_teacher_checkpoint>
-
-### ETH dataset
-python3 imle_eth.py --exp <exp_name> \
---checkpt_freq 1 --epochs 50 --batch_size 24 --init_lr 1e-4 --num_to_gen 20 \
---subset eth --rotate --rotate_time_frame 6 \
---load_pretrained --ckpt_path <path_to_eth_teacher_checkpoint>
-
-python3 imle_eth.py --exp <exp_name> \
---checkpt_freq 1 --epochs 50 --batch_size 16 --init_lr 1e-4 --num_to_gen 20 \
---subset hotel --rotate --rotate_time_frame 6 \
---load_pretrained --ckpt_path <path_to_hotel_teacher_checkpoint>
-
-python3 imle_eth.py --exp <exp_name> \
---checkpt_freq 1 --epochs 50 --batch_size 32 --init_lr 1e-4 --num_to_gen 20 \
---subset univ --rotate --rotate_time_frame 6 \
---load_pretrained --ckpt_path <path_to_univ_teacher_checkpoint>
-
-python3 imle_eth.py --exp <exp_name> \
---checkpt_freq 1 --epochs 50 --batch_size 64 --init_lr 1e-4 --num_to_gen 20 \
---subset zara1 --rotate --rotate_time_frame 6 \
---load_pretrained --ckpt_path <path_to_zara1_teacher_checkpoint>
-
-python3 imle_eth.py --exp <exp_name> \
---checkpt_freq 1 --epochs 50 --batch_size 48 --init_lr 1e-4 --num_to_gen 20 \
---subset zara2 --rotate --rotate_time_frame 6 \
---load_pretrained --ckpt_path <path_to_zara2_teacher_checkpoint>
-
-### SDD dataset
-python3 imle_sdd.py --exp <exp_name> --rotate --rotate_time_frame 6 \
---checkpt_freq 1 --epochs 50 --batch_size 48 --init_lr 1e-4 --num_to_gen 20 \
---load_pretrained --ckpt_path <path_to_sdd_teacher_checkpoint>
+python train.py --cfg cfg/release/rat_bnd.yml --exp rat_bnd_release
 ```
 
-Note that IMLE checkpoints ought to be stored in the directory `results_[datasets]/imle/[exp]/models/` and named `checkpoint_best.pt`.
+## Evaluate
 
-4. **Student Model Sampling**
+### Generic evaluation
+
 ```bash
-### NBA dataset
-python3 imle_nba.py --exp <exp_name> --eval --save_samples \
---checkpt_freq 1 --epochs 50 --batch_size 48 --init_lr 1e-3 --num_to_gen 20 
-
-
-### ETH dataset
-python3 imle_eth.py --exp <exp_name> --eval --save_samples \
---checkpt_freq 1 --epochs 50 --batch_size 24 --init_lr 1e-4 --num_to_gen 20 \
---subset eth --rotate --rotate_time_frame 6 
-
-python3 imle_eth.py --exp <exp_name> --eval --save_samples \
---checkpt_freq 1 --epochs 50 --batch_size 16 --init_lr 1e-4 --num_to_gen 20 \
---subset hotel --rotate --rotate_time_frame 6 
-
-python3 imle_eth.py --exp <exp_name> --eval --save_samples \
---checkpt_freq 1 --epochs 50 --batch_size 32 --init_lr 1e-4 --num_to_gen 20 \
---subset univ --rotate --rotate_time_frame 6 
-
-python3 imle_eth.py --exp <exp_name> --eval --save_samples \
---checkpt_freq 1 --epochs 50 --batch_size 64 --init_lr 1e-4 --num_to_gen 20 \
---subset zara1 --rotate --rotate_time_frame 6 
-
-python3 imle_eth.py --exp <exp_name> --eval --save_samples \
---checkpt_freq 1 --epochs 50 --batch_size 48 --init_lr 1e-4 --num_to_gen 20 \
---subset zara2 --rotate --rotate_time_frame 6 
-
-### SDD dataset
-python3 imle_sdd.py --exp <exp_name> --rotate --rotate_time_frame 6 --eval --save_samples \
---checkpt_freq 1 --epochs 50 --batch_size 48 --init_lr 1e-4 --num_to_gen 20 
+python eval.py --cfg cfg/release/rat.yml --ckpt_path weights/rat/checkpoint_best.pt
+python eval.py --cfg cfg/release/babel.yml --ckpt_path weights/babel/checkpoint_best.pt
+python eval.py --cfg cfg/release/rat_bnd.yml --ckpt_path weights/rat_bnd/checkpoint_best.pt
 ```
 
-To train your own versions of the teacher and student models, please specify the `--cfg` flag with the path to the corresponding configuration file. The hyperparameters are defined in YAML files such as `cor_fm.yml` and `imle.yml`. You may either create a custom configuration file or use command-line arguments to override specific hyperparameters — such as the learning rate, preprocessed rotation, epochs etc. to search for the best set of hyperparameters.
+### Dataset wrappers
 
-### Suggestions
-We recommend running `python -h *.py` to explore how configuration files are read from the `./cfg/` directory and the usage of other arguments. Once familiar, you can create your own custom config files.
-
-## ✅ Checklist for Code Upload
-- [x] ~~Datasets including NBA SportVU, SDD and ETH-UCY datasets~~
-- [x] ~~Project structure~~
-- [x] ~~Training scripts~~
-- [x] ~~Evaulation scripts~~
-- [x] ~~Environment setup & config files~~
-- [x] ~~Model Checkpoints~~
-
-## 📚 Citation
-If you find our code useful, please consider cite our paper:
-```
-@inproceedings{fu2025moflowonestepflowmatching,
-  author    = {Fu, Yuxiang and Yan, Qi and Wang, Lele and Li, Ke and Liao, Renjie},
-  title     = {MoFlow: One-Step Flow Matching for Human Trajectory Forecasting via Implicit Maximum Likelihood Estimation based Distillation},
-  journal   = {Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition},
-  year      = {2025},
-}
+```bash
+python eval_rat.py --cfg cfg/release/rat.yml --ckpt_path weights/rat/checkpoint_best.pt
+python eval_babel.py --cfg cfg/release/babel.yml --ckpt_path weights/babel/checkpoint_best.pt
 ```
 
-## 🙏 Acknowledgements
+## Public Evaluation
 
-This codebase is built on [LED](https://github.com/MediaBrain-SJTU/LED) and [MTR](https://github.com/sshaoshuai/MTR). We thank the authors and appreciate the efforts for releasing their code. We also acknowledge the repos from [Datasets](#-datasets) section where they released the data and dataloader.
+`pub_evaluation.py` is the shortest way to reproduce the released evaluation presets.
 
-## 👨🏻‍💻 Contact
-Feel free to contact [yuxiang.fu@ece.ubc.ca](mailto:yuxiang.fu@ece.ubc.ca) or submit a Github issue if you have identify any bugs.
+### Default rat
 
-## ⭐ Star History
-If you've found MoFlow-IMLE useful for your research or projects, please show your support by ⭐ in this repo.
+```bash
+python pub_evaluation.py
+```
 
-[![Star History Chart](https://api.star-history.com/svg?repos=felix-yuxiang/MoFlow&type=Timeline)](https://star-history.com/#felix-yuxiang/MoFlow&Timeline)
+### Default babel
+
+```bash
+python pub_evaluation.py --preset babel
+```
+
+### Rat with `L_bnd`
+
+```bash
+python pub_evaluation.py --preset rat_bnd
+```
+
+Preset defaults:
+
+- `rat`: `10` Euler steps
+- `babel`: `10` Euler steps
+- `rat_bnd`: `100` `lin_poly` steps with `p=5`
+
+You can override the checkpoint path when needed:
+
+```bash
+python pub_evaluation.py --preset rat --ckpt_path /absolute/path/to/checkpoint_best.pt
+```
+
+## Configs
+
+The public presets live in:
+
+```text
+cfg/release/rat.yml
+cfg/release/babel.yml
+cfg/release/rat_bnd.yml
+```
+
+These presets all use:
+
+- `MODEL.M2_DECODER_STYLE: historical_pre_film`
+- `MODEL.SDE_CONTROL_STYLE: encoded`
+
+## Notes
+
+- This public release only exposes rat and babel workflows.
+- Old ETH / NBA / SDD / IMLE entry scripts are intentionally removed from the release surface.
+- `pub_evaluation.py` expects downloaded public checkpoints under `weights/` unless `--ckpt_path` is provided.

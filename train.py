@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 import os
 import torch
 import argparse
@@ -37,8 +38,7 @@ def parse_config():
 
 	parser = argparse.ArgumentParser()
 
-	# Basic configuration
-	parser.add_argument('--cfg', default='cfg/rat/cor_fm.yml', type=str, help="Config file path")
+	parser.add_argument('--cfg', default='cfg/release/rat.yml', type=str, help="Config file path")
 	parser.add_argument('--exp', type=str, help="explaination")
 	parser.add_argument('--method', type=str, choices=['cogflow', 'latent_ar', 'rssm'], help="Forecast method")
 	parser.add_argument('--variant', type=str, help="Method variant, e.g. gru or transformer")
@@ -69,9 +69,6 @@ def apply_runtime_overrides(cfg, args):
 	dataset_name_map = {
 		'rat': 'rat_dataset',
 		'babel': 'babel_dataset',
-		'nba': 'nba_dataset',
-		'eth_ucy': 'eth_dataset',
-		'sdd': 'sdd_dataset',
 	}
 	if cfg.get('dataset_name', None) is None and cfg.get('dataset', None) in dataset_name_map:
 		cfg.dataset_name = dataset_name_map[cfg.dataset]
@@ -247,7 +244,3 @@ def main():
 
 if __name__ == "__main__":
 	main()
-
-# python train.py --cfg /root/CogFlow/cfg/full_cfg/cor_rat_fm.yml
-
-# python train.py --cfg D:\04_code\MoFlow\cfg\full_cfg\cor_rat_fm_mn.yml

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 import os
 import numpy as np
 import matplotlib.pyplot as plt
@@ -18,12 +19,8 @@ from utils.utils import LossBuffer
 from models.losses import BoundednessLoss, get_boundedness_weight
 from models.model_registry import register_model
 from models.backbone import MotionTransformer
-from models.backbone_eth_ucy import ETHMotionTransformer
 
 ModelPrediction = namedtuple('ModelPrediction', ['pred_vel', 'pred_data', 'pred_score'])
-
-
-# helpers functions
 
 def exists(x):
     return x is not None

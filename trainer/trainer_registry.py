@@ -1,4 +1,4 @@
-# trainer_registry.py
+# SPDX-License-Identifier: MIT
 from typing import Callable, Dict, Any
 
 _TRAINER_REGISTRY: Dict[str, Callable[..., Any]] = {}

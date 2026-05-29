@@ -1,10 +1,7 @@
+# SPDX-License-Identifier: MIT
 import copy
 from typing import Callable, Dict
 from torch.utils.data import DataLoader
-
-# =========================
-# Dataset Builder Registry
-# =========================
 
 _DATASET_REGISTRY: Dict[str, Callable] = {}
 
@@ -29,11 +26,6 @@ def get_dataset_builder(name: str) -> Callable:
         )
     return _DATASET_REGISTRY[name]
 
-
-# =========================
-# Generic Entry Point
-# =========================
-
 def build_data_loader(cfg, args):
     """
     Unified dataset entry point.
@@ -48,9 +40,6 @@ def build_data_loader(cfg, args):
         dataset_name_map = {
             "rat": "rat_dataset",
             "babel": "babel_dataset",
-            "nba": "nba_dataset",
-            "eth_ucy": "eth_dataset",
-            "sdd": "sdd_dataset",
         }
         dataset_name = dataset_name_map.get(dataset)
         if dataset_name is None:

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 import logging
 import os 
 import copy
@@ -27,8 +28,6 @@ from collections import defaultdict
 import torch.nn.functional as F
 from utils.pred_future_io import save_pred_fut
 
-
-# helpers functions
 def exists(x):
     return x is not None
 

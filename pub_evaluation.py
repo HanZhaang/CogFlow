@@ -1,223 +1,101 @@
+# SPDX-License-Identifier: MIT
 import argparse
-import json
 from pathlib import Path
-from typing import Dict, Optional, Sequence, Union
-
-import numpy as np
-
-from utils.pred_future_io import load_pred_fut
-
-ArrayLike = Union[np.ndarray]
-
-def _to_numpy(x: ArrayLike) -> np.ndarray:
-    """Accept numpy or torch tensor and return numpy."""
-    if isinstance(x, np.ndarray):
-        return x
-    # torch.Tensor support (without importing torch explicitly)
-    if hasattr(x, "detach") and hasattr(x, "cpu") and hasattr(x, "numpy"):
-        return x.detach().cpu().numpy()
-    raise TypeError(f"Unsupported type: {type(x)}")
 
 
-def evaluate_predictions(
-    pred: ArrayLike,  # (N, B, K, A, F, D)
-    fut: ArrayLike,   # (N, B, A, F, D)
-    horizons: Optional[Sequence[int]] = None,
-    eps: float = 1e-12,
-) -> Dict[str, np.ndarray]:
-    """
-    Unified evaluator (offline).
-
-    Args:
-        pred: predicted trajectories, shape (N, B, K, A, F, D)
-        fut:  ground-truth future trajectories, shape (N, B, A, F, D)
-        horizons: optional list of frame indices (1..F) to report ADE/FDE at multiple horizons.
-                  If None, will report only full-horizon ADE and final-step FDE.
-                  Example: horizons=[5, 10, 20, 30] for F=30.
-        eps: numerical stability.
-
-    Returns:
-        performance: dict of metrics. Each value is a numpy array.
-            - "ADE_min": (H,) or (1,)    best-of-K ADE over frames up to horizon
-            - "FDE_min": (H,) or (1,)    best-of-K final displacement at horizon
-            - "ADE_avg": (H,) or (1,)    average over K of ADE
-            - "FDE_avg": (H,) or (1,)    average over K of FDE
-            - "Diversity": (H,) or (1,)  mean pairwise distance among K predictions (optional but useful)
-            - "num_trajs": scalar        total evaluated trajectories count = N*B*A
-            - "K": scalar                number of modes
-            - "F": scalar                total frames
-            - "D": scalar                coord dimension
-    Notes:
-        - Distance is L2 over last dimension D.
-        - Aggregation is mean over all (N,B,A) trajectories.
-    """
-    pred_np = _to_numpy(pred).astype(np.float64, copy=False)
-    fut_np = _to_numpy(fut).astype(np.float64, copy=False)
-
-    # if pred_np.ndim != 6:
-    #     raise ValueError(f"pred must be 6D (N,B,K,A,F,D). Got {pred_np.shape}")
-    # if fut_np.ndim != 5:
-    #     raise ValueError(f"fut must be 5D (N,B,A,F,D). Got {fut_np.shape}")
-
-    B, K, A, F, D = pred_np.shape
-    if fut_np.shape != (B, A, F, D):
-        raise ValueError(f"Shape mismatch: pred {pred_np.shape} vs fut {fut_np.shape}")
-
-    if horizons is None:
-        horizons = [F]
-    else:
-        horizons = list(horizons)
-        for h in horizons:
-            if not (1 <= h <= F):
-                raise ValueError(f"horizon must be in [1, F]. Got {h} with F={F}")
-
-    # Expand fut to align with pred modes: (N,B,1,A,F,D) -> broadcast along K
-    fut_exp = fut_np[:, None, :, :, :]  # (N,B,1,A,F,D)
-
-    # Per-frame L2 error: (N,B,K,A,F)
-    diff = pred_np - fut_exp
-    dist = np.sqrt(np.maximum(np.sum(diff * diff, axis=-1), eps))
-
-    # Flatten trajectories for stable aggregation: T = N*B*A
-    # dist_flat: (T, K, F)
-    dist_flat = dist.transpose(0, 2, 1, 3).reshape(B * A, K, F)
-
-    # Helper to compute metrics at a given horizon h (1..F)
-    def _metrics_at_h(h: int):
-        # ADE per mode: mean over frames [0:h)
-        ade_k = dist_flat[:, :, :h].mean(axis=-1)  # (T,K)
-
-        # FDE per mode: frame (h-1)
-        fde_k = dist_flat[:, :, h - 1]            # (T,K)
-
-        # best-of-K
-        ade_min = ade_k.min(axis=1).mean()        # scalar
-        fde_min = fde_k.min(axis=1).mean()
-
-        # average over K
-        ade_avg = ade_k.mean(axis=1).mean()
-        fde_avg = fde_k.mean(axis=1).mean()
-
-        # Diversity: mean pairwise distance among K predicted endpoints at horizon h
-        # pred_end: (T,K,D)
-        pred_end = pred_np[:, :, :, h - 1, :].transpose(0, 2, 1, 3).reshape(B * A, K, D)
-        if K <= 1:
-            diversity = 0.0
-        else:
-            # compute mean pairwise L2 efficiently
-            # ||xi-xj||^2 = ||xi||^2 + ||xj||^2 - 2 xi·xj
-            x2 = np.sum(pred_end * pred_end, axis=-1, keepdims=True)   # (T,K,1)
-            gram = pred_end @ pred_end.transpose(0, 2, 1)              # (T,K,K)
-            d2 = x2 + x2.transpose(0, 2, 1) - 2.0 * gram               # (T,K,K)
-            d2 = np.maximum(d2, 0.0)
-            # take upper triangle mean (exclude diag)
-            triu = np.triu_indices(K, k=1)
-            diversity = np.sqrt(d2[:, triu[0], triu[1]] + eps).mean()
-
-        return ade_min, fde_min, ade_avg, fde_avg, diversity
-
-    ADE_min, FDE_min, ADE_avg, FDE_avg, DIV = [], [], [], [], []
-    for h in horizons:
-        a_min, f_min, a_avg, f_avg, div = _metrics_at_h(h)
-        ADE_min.append(a_min)
-        FDE_min.append(f_min)
-        ADE_avg.append(a_avg)
-        FDE_avg.append(f_avg)
-        DIV.append(div)
-
-    performance = {
-        "ADE_min": np.array(ADE_min, dtype=np.float64),
-        "FDE_min": np.array(FDE_min, dtype=np.float64),
-        "ADE_avg": np.array(ADE_avg, dtype=np.float64),
-        "FDE_avg": np.array(FDE_avg, dtype=np.float64),
-        "Diversity": np.array(DIV, dtype=np.float64),
-        "num_trajs": np.array(B * A, dtype=np.int64),
-        "K": np.array(K, dtype=np.int64),
-        "F": np.array(F, dtype=np.int64),
-        "D": np.array(D, dtype=np.int64),
-        "horizons": np.array(horizons, dtype=np.int64),
-    }
-    return performance
+PRESETS = {
+    "rat": {
+        "cfg": "cfg/release/rat.yml",
+        "ckpt_path": "weights/rat/checkpoint_best.pt",
+        "sampling_steps": 10,
+        "solver": "euler",
+    },
+    "babel": {
+        "cfg": "cfg/release/babel.yml",
+        "ckpt_path": "weights/babel/checkpoint_best.pt",
+        "sampling_steps": 10,
+        "solver": "euler",
+    },
+    "rat_bnd": {
+        "cfg": "cfg/release/rat_bnd.yml",
+        "ckpt_path": "weights/rat_bnd/checkpoint_best.pt",
+        "sampling_steps": 100,
+        "solver": "lin_poly",
+        "lin_poly_p": 5,
+        "lin_poly_long_step": 1000,
+    },
+}
 
 
-def _default_horizons(total_frames: int) -> Sequence[int]:
-    if total_frames >= 10 and total_frames % 10 == 0:
-        return list(range(10, total_frames + 1, 10))
-    return [total_frames]
-
-
-def performance_to_serializable(performance: Dict[str, np.ndarray]) -> Dict[str, Union[int, float, list]]:
-    serializable = {}
-    for key, value in performance.items():
-        if isinstance(value, np.ndarray):
-            if value.ndim == 0:
-                serializable[key] = value.item()
-            else:
-                serializable[key] = value.tolist()
-        else:
-            serializable[key] = value
-    return serializable
-
-
-def print_performance(performance: Dict[str, np.ndarray]) -> None:
-    horizons = performance["horizons"].tolist()
-    ade_min = performance["ADE_min"].tolist()
-    fde_min = performance["FDE_min"].tolist()
-    ade_avg = performance["ADE_avg"].tolist()
-    fde_avg = performance["FDE_avg"].tolist()
-    diversity = performance["Diversity"].tolist()
-
-    print(
-        f"num_trajs={int(performance['num_trajs'])} "
-        f"K={int(performance['K'])} F={int(performance['F'])} D={int(performance['D'])}"
-    )
-    for horizon, ade_m, fde_m, ade_a, fde_a, div in zip(
-        horizons, ade_min, fde_min, ade_avg, fde_avg, diversity
-    ):
-        print(
-            "horizon={:>3d} | ADE_min={:.6f} | FDE_min={:.6f} | "
-            "ADE_avg={:.6f} | FDE_avg={:.6f} | Diversity={:.6f}".format(
-                int(horizon), ade_m, fde_m, ade_a, fde_a, div
-            )
-        )
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Offline public evaluation for saved prediction npz files.")
-    parser.add_argument("--npz_path", required=True, help="Path to the saved prediction npz.")
-    parser.add_argument(
-        "--horizons",
-        nargs="*",
-        type=int,
-        default=None,
-        help="Evaluation horizons in frames. Default: auto infer as 10,20,...,F when possible.",
-    )
-    parser.add_argument(
-        "--output_json",
-        type=str,
-        default=None,
-        help="Optional path to dump metrics as JSON.",
-    )
+def parse_args():
+    parser = argparse.ArgumentParser(description="Public evaluation presets for CogFlow release.")
+    parser.add_argument("--preset", choices=sorted(PRESETS), default="rat")
+    parser.add_argument("--cfg", type=str, default=None, help="Optional config override.")
+    parser.add_argument("--ckpt_path", type=str, default=None, help="Optional checkpoint override.")
+    parser.add_argument("--data_dir", type=str, default=None, help="Optional dataset root override.")
+    parser.add_argument("--batch_size", type=int, default=None)
+    parser.add_argument("--num_workers", type=int, default=None)
+    parser.add_argument("--sampling_steps", type=int, default=None)
+    parser.add_argument("--solver", choices=["euler", "lin_poly"], default=None)
+    parser.add_argument("--lin_poly_p", type=int, default=None)
+    parser.add_argument("--lin_poly_long_step", type=int, default=None)
+    parser.add_argument("--save_samples", action="store_true", default=False)
+    parser.add_argument("--eval_on_train", action="store_true", default=False)
+    parser.add_argument("--fix_random_seed", action="store_true", default=False)
+    parser.add_argument("--seed", type=int, default=42)
     return parser.parse_args()
 
 
-def main() -> None:
-    args = parse_args()
-    bundle = load_pred_fut(args.npz_path)
-    pred = bundle["pred"]
-    fut = bundle["fut"]
-    total_frames = pred.shape[-2]
-    horizons = args.horizons if args.horizons else _default_horizons(total_frames)
-    performance = evaluate_predictions(pred, fut, horizons=horizons)
-    print_performance(performance)
-
-    if args.output_json:
-        output_path = Path(args.output_json)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(
-            json.dumps(performance_to_serializable(performance), indent=2, ensure_ascii=False),
-            encoding="utf-8",
+def build_eval_namespace(args):
+    preset = PRESETS[args.preset]
+    ckpt_path = args.ckpt_path or preset["ckpt_path"]
+    if not Path(ckpt_path).exists():
+        raise FileNotFoundError(
+            f"Checkpoint not found: {ckpt_path}. "
+            "Download the public weight bundle and place it under the default weights directory, "
+            "or pass --ckpt_path explicitly."
         )
+
+    return argparse.Namespace(
+        ckpt_path=ckpt_path,
+        cfg=args.cfg or preset["cfg"],
+        exp="public_release",
+        save_samples=args.save_samples,
+        eval_on_train=args.eval_on_train,
+        batch_size=args.batch_size,
+        data_dir=args.data_dir,
+        n_train=None,
+        n_test=None,
+        rotate=False,
+        data_norm=None,
+        data_source=None,
+        subset=None,
+        rotate_time_frame=None,
+        num_workers=args.num_workers,
+        fix_random_seed=args.fix_random_seed,
+        seed=args.seed,
+        sampling_steps=args.sampling_steps or preset["sampling_steps"],
+        solver=args.solver or preset["solver"],
+        lin_poly_p=args.lin_poly_p or preset.get("lin_poly_p", 2),
+        lin_poly_long_step=args.lin_poly_long_step or preset.get("lin_poly_long_step", 1000),
+        method="cogflow",
+        variant=None,
+        decoder=None,
+        action_fusion=None,
+        num_regime=None,
+        m2_decoder_style="historical_pre_film",
+        sde_control_style="encoded",
+        enable_dissipativity=False,
+        dissipativity_weight=None,
+    )
+
+
+def main():
+    args = parse_args()
+    from eval_utils import run_evaluation
+
+    eval_args = build_eval_namespace(args)
+    run_evaluation(eval_args)
 
 
 if __name__ == "__main__":

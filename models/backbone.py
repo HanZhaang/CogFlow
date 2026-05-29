@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 import numpy as np
 
 import torch
@@ -24,7 +25,7 @@ class MotionTransformer(nn.Module):
     def __init__(self, model_config, logger, config):
         super().__init__()
         self.model_cfg = model_config
-        self.dim = self.model_cfg.CONTEXT_ENCODER.D_MODEL # 统一的通道维（上下游对齐）
+        self.dim = self.model_cfg.CONTEXT_ENCODER.D_MODEL
         self.config = config
         self.logger = logger
         method_cfg = getattr(self.config, "METHOD", EasyDict())

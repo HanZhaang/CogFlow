@@ -1,11 +1,10 @@
+# SPDX-License-Identifier: MIT
 import os
-import matplotlib.pyplot as plt
 import numpy as np
 import pickle
 import glob
 from torch.utils.data import Dataset
-import torch.nn.functional as F
-from utils.normalization import normalize_min_max, unnormalize_min_max, normalize_sqrt, unnormalize_sqrt
+from utils.normalization import normalize_min_max, normalize_sqrt
 import torch
 from utils.utils import rotate_trajs_x_direction
 
@@ -242,14 +241,6 @@ class RatDatasetMinMax(Dataset):
                 if total_scenes_loaded_ >= len(self.trajs):
                     break
 
-                # y_t_original_scale_ = unnormalize_min_max(torch.from_numpy(data['y_t'][:, -1]), cfg.fut_traj_min, cfg.fut_traj_max, -1, 1)
-                # y_pred_data_original_scale_ = torch.from_numpy(data['y_pred_data'])
-                # assert torch.sum(torch.abs(y_t_original_scale_ - y_pred_data_original_scale_)) < 1e-5, 'IMLE data is not consistent'
-                        
-                # past_tarj_original_scale_ = torch.from_numpy(data['past_traj_original_scale'])
-                # assert torch.sum(torch.abs(past_tarj_original_scale_[:10] - self.past_traj_original_scale[:10])) < 1e-5, 'IMLE data is not consistent'
-
-            # concat the data
             for key in keys_ls:
                 imle_data_dict[key] = torch.from_numpy(np.concatenate(imle_data_dict[key], axis=0))[:len(self.trajs)]
 

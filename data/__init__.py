@@ -1,5 +1,3 @@
+# SPDX-License-Identifier: MIT
 from .dataloader_rat import build_rat_dataloader
 from .dataloader_babel import build_babel_dataloader
-from .dataloader_nba import build_nba_dataloader
-from .dataloader_eth_ucy import build_eth_dataloader
-from .dataloader_sdd import build_sdd_dataloader

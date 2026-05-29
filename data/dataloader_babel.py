@@ -1,13 +1,9 @@
+# SPDX-License-Identifier: MIT
 import os
-import matplotlib.pyplot as plt
 import numpy as np
-import pickle
-import glob
 from torch.utils.data import Dataset
-import torch.nn.functional as F
-from utils.normalization import normalize_min_max, unnormalize_min_max, normalize_sqrt, unnormalize_sqrt
+from utils.normalization import normalize_min_max, normalize_sqrt
 import torch
-from utils.utils import rotate_trajs_x_direction
 
 def seq_collate_rat(batch):
     (past_traj, fut_traj, past_traj_orig, fut_traj_orig, traj_vel, hist_feats, hist_cond_cue, fut_cond_cue) = zip(*batch)
@@ -71,7 +67,7 @@ def seq_collate_imle_train(batch):
 
 class BabelDatasetMinMax(Dataset):
     """
-    读取你的大鼠关键点数据，组织为 [N, T_total, V=8, 2]，再切 [T_h | T_p]
+    Load BABEL pose sequences and split them into history and future windows.
     """
     def __init__(self,
                  obs_len=12, pred_len=18, training=True,
