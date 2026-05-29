@@ -12,7 +12,12 @@ from models.context_encoder.mtr_encoder import SinusoidalPosEmb
 from models.context_encoder.condition_encoder import ZEncoder, ZFiLM
 from models.neural_sde.ctr_sde import simulate_sde_paths, ControlledSSLSDE
 from models.neural_sde.z0_encoder import Z0Encoder
-from utils.checkpoint_compat import HISTORICAL_PRE_FILM, LEGACY_BND_POST_FILM
+from utils.checkpoint_compat import (
+    ENCODED_SDE_CONTROL,
+    HISTORICAL_PRE_FILM,
+    LEGACY_BND_POST_FILM,
+    RAW_HISTORICAL_SDE_CONTROL,
+)
 
 
 class MotionTransformer(nn.Module):
@@ -32,10 +37,15 @@ class MotionTransformer(nn.Module):
         self.m2_decoder_style = str(
             self.model_cfg.get('M2_DECODER_STYLE', self.config.get('m2_decoder_style', HISTORICAL_PRE_FILM))
         )
+        self.sde_control_style = str(
+            self.model_cfg.get('SDE_CONTROL_STYLE', self.config.get('sde_control_style', RAW_HISTORICAL_SDE_CONTROL))
+        )
         if self.m2_decoder_style not in {HISTORICAL_PRE_FILM, LEGACY_BND_POST_FILM}:
             raise ValueError(f"Unknown M2 decoder style: {self.m2_decoder_style}")
+        if self.sde_control_style not in {RAW_HISTORICAL_SDE_CONTROL, ENCODED_SDE_CONTROL}:
+            raise ValueError(f"Unknown SDE control style: {self.sde_control_style}")
         self.use_legacy_bnd_decoder = self.ablation_mode == "m2" and self.m2_decoder_style == LEGACY_BND_POST_FILM
-        self.use_encoded_sde_controls = self.ablation_mode == "m2" and self.m2_decoder_style == LEGACY_BND_POST_FILM
+        self.use_encoded_sde_controls = self.ablation_mode == "m2" and self.sde_control_style == ENCODED_SDE_CONTROL
         assert not use_pre_norm, "Pre-norm is not supported in this model"
         self.T_f = self.config.get('future_frames', 0)
         self.dt = self.config.get('dt', 0)
@@ -186,6 +196,7 @@ class MotionTransformer(nn.Module):
         params_other = params_total - params_encoder - params_decoder
         logger.info(f"CogFlow decoder: {self.decoder_name}")
         logger.info(f"CogFlow m2 decoder style: {self.m2_decoder_style}")
+        logger.info(f"CogFlow SDE control style: {self.sde_control_style}")
         logger.info("Total parameters: {:,}, Encoder: {:,}, Decoder: {:,}, Other: {:,}".format(
             params_total, params_encoder, params_decoder, params_other
         ))

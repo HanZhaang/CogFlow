@@ -12,9 +12,13 @@ import trainer  # noqa: F401
 from utils.config import Config
 from utils.checkpoint_compat import (
     AUTO_M2_DECODER_STYLE,
+    AUTO_SDE_CONTROL_STYLE,
+    ENCODED_SDE_CONTROL,
     HISTORICAL_PRE_FILM,
     LEGACY_BND_POST_FILM,
     configure_cogflow_m2_decoder_style,
+    configure_cogflow_sde_control_style,
+    RAW_HISTORICAL_SDE_CONTROL,
 )
 from utils.utils import set_random_seed, log_config_to_file
 from train import apply_runtime_overrides
@@ -60,6 +64,13 @@ def add_eval_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         choices=[AUTO_M2_DECODER_STYLE, HISTORICAL_PRE_FILM, LEGACY_BND_POST_FILM],
         default=None,
         help='Override M2 decoder path style or auto-detect from checkpoint.',
+    )
+    parser.add_argument(
+        '--sde-control-style',
+        type=str,
+        choices=[AUTO_SDE_CONTROL_STYLE, RAW_HISTORICAL_SDE_CONTROL, ENCODED_SDE_CONTROL],
+        default=None,
+        help="Override SDE control path style. Use 'encoded' with historical_pre_film to get old attention plus cmd-encoded controls.",
     )
     parser.add_argument('--enable_dissipativity', action='store_true', help='Enable dissipativity constraint.')
     parser.add_argument('--dissipativity_weight', type=float, default=None, help='Dissipativity weight override.')
@@ -112,6 +123,10 @@ def apply_eval_overrides(cfg, args):
         cfg,
         explicit_style=getattr(args, 'm2_decoder_style', None),
         ckpt_path=cfg.get('ckpt_path', None),
+    )
+    configure_cogflow_sde_control_style(
+        cfg,
+        explicit_style=getattr(args, 'sde_control_style', None),
     )
 
     tag = '_'
