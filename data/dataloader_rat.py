@@ -6,6 +6,7 @@ import glob
 from torch.utils.data import Dataset
 from utils.normalization import normalize_min_max, normalize_sqrt
 import torch
+import torch.nn.functional as F
 from utils.utils import rotate_trajs_x_direction
 
 
@@ -91,7 +92,7 @@ class RatDatasetMinMax(Dataset):
                  obs_len=12, pred_len=18, training=True,
                  num_scenes=None, test_scenes=None,
                  overfit=False, imle=False, cfg=None, rotate=False,
-                 data_dir='data/rat', data_file='hist10pred20/rat_train.npy',
+                 data_dir='data/rat', data_file='',
                  data_norm='min_max'):
         super().__init__()
         self.obs_len  = obs_len
@@ -106,20 +107,20 @@ class RatDatasetMinMax(Dataset):
 
         if not overfit:
             if training:
-                data_root = os.path.join(data_dir, 'rat_ver2_smooth_3060/rat_pose_train.npy')
-                cmd_root = os.path.join(data_dir, 'rat_ver2_smooth_3060/rat_stim_train.npy')
+                data_root = os.path.join(data_dir, 'rat_pose_train.npy')
+                cmd_root = os.path.join(data_dir, 'rat_stim_train.npy')
             else:
                 data_root = _first_existing_path(
-                    os.path.join(data_dir, 'rat_ver2_smooth_3060/rat_pose_test.npy'),
-                    os.path.join(data_dir, 'rat_ver2_smooth_3060/rat_pose_val.npy'),
+                    os.path.join(data_dir, 'rat_pose_test.npy'),
+                    os.path.join(data_dir, 'rat_pose_val.npy'),
                 )
                 cmd_root = _first_existing_path(
-                    os.path.join(data_dir, 'rat_ver2_smooth_3060/rat_stim_test.npy'),
-                    os.path.join(data_dir, 'rat_ver2_smooth_3060/rat_stim_val.npy'),
+                    os.path.join(data_dir, 'rat_stim_test.npy'),
+                    os.path.join(data_dir, 'rat_stim_val.npy'),
                 )
         else:
-            data_root = os.path.join(data_dir, 'rat_ver2_smooth_3060/rat_pose_train.npy')
-            cmd_root = os.path.join(data_dir, 'rat_ver2_smooth_3060/rat_stim_train.npy')
+            data_root = os.path.join(data_dir, 'rat_pose_train.npy')
+            cmd_root = os.path.join(data_dir, 'rat_stim_train.npy')
 
         self.trajs_raw = np.load(data_root) #(N,15,11,2)
         self.cmd_raw = np.load(cmd_root)

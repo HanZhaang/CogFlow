@@ -3,6 +3,7 @@ import os
 import numpy as np
 from torch.utils.data import Dataset
 from utils.normalization import normalize_min_max, normalize_sqrt
+import torch.nn.functional as F
 import torch
 
 def seq_collate_rat(batch):

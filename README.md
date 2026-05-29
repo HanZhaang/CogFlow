@@ -1,18 +1,9 @@
 # CogFlow Public Release
 
-This release focuses on the public CogFlow training and evaluation pipeline for two datasets only:
+This release focuses on the public CogFlow training and evaluation pipeline for two datasets:
 
 - `rat`
 - `babel`
-
-The default public settings use:
-
-- `historical_pre_film` decoder style
-- `encoded` SDE control style
-
-That means the released default model path is:
-
-- `cmd encoder + old FiLM / old structured decoder`
 
 ## What Is Included
 
@@ -20,7 +11,6 @@ Three public presets are supported:
 
 1. `rat`: standard rat training and evaluation
 2. `babel`: standard babel training and evaluation
-3. `rat_bnd`: rat training and evaluation with `L_bnd`
 
 The recommended public entry points are:
 
@@ -47,17 +37,17 @@ Download the public dataset packages and weight packages from your release asset
 Expected files:
 
 ```text
-data/rat/rat_ver2_smooth_3060/rat_pose_train.npy
-data/rat/rat_ver2_smooth_3060/rat_stim_train.npy
-data/rat/rat_ver2_smooth_3060/rat_pose_val.npy
-data/rat/rat_ver2_smooth_3060/rat_stim_val.npy
+data/rat/rat_pose_train.npy
+data/rat/rat_stim_train.npy
+data/rat/rat_pose_val.npy
+data/rat/rat_stim_val.npy
 ```
 
 Optional aliases also supported for evaluation:
 
 ```text
-data/rat/rat_ver2_smooth_3060/rat_pose_test.npy
-data/rat/rat_ver2_smooth_3060/rat_stim_test.npy
+data/rat/rat_pose_test.npy
+data/rat/rat_stim_test.npy
 ```
 
 ### Babel dataset
@@ -80,7 +70,6 @@ Place downloaded checkpoints here:
 ```text
 weights/rat/checkpoint_best.pt
 weights/babel/checkpoint_best.pt
-weights/rat_bnd/checkpoint_best.pt
 ```
 
 ## Train
@@ -88,7 +77,12 @@ weights/rat_bnd/checkpoint_best.pt
 ### Default rat
 
 ```bash
-python train.py --cfg cfg/release/rat.yml --exp rat_release
+python train.py --cfg cfg/full_cfg/cor_rat_fm_mn.yml --exp rat_release
+```
+
+If $L_{\textrm{bnd}}$ is included, use the following command:
+```bash
+python train.py --cfg cfg/full_cfg/cor_rat_fm_mn.yml --exp rat_test --enable_dissipativity --dissipativity_weight 0.001
 ```
 
 ### Default babel
@@ -97,20 +91,13 @@ python train.py --cfg cfg/release/rat.yml --exp rat_release
 python train.py --cfg cfg/release/babel.yml --exp babel_release
 ```
 
-### Rat with `L_bnd`
-
-```bash
-python train.py --cfg cfg/release/rat_bnd.yml --exp rat_bnd_release
-```
-
 ## Evaluate
 
 ### Generic evaluation
 
 ```bash
-python eval.py --cfg cfg/release/rat.yml --ckpt_path weights/rat/checkpoint_best.pt
-python eval.py --cfg cfg/release/babel.yml --ckpt_path weights/babel/checkpoint_best.pt
-python eval.py --cfg cfg/release/rat_bnd.yml --ckpt_path weights/rat_bnd/checkpoint_best.pt
+python eval.py --cfg cfg/full_cfg/cor_rat_eval_mn.yml --ckpt_path weights/rat/checkpoint_best.pt
+python eval.py --cfg cfg/full_cfg/cor_babel_fm_m1.yml --ckpt_path weights/babel/checkpoint_best.pt
 ```
 
 ### Dataset wrappers
