@@ -69,6 +69,15 @@ python train.py \
   --method cogflow
 ```
 
+```
+python train.py \
+  --cfg cfg/full_cfg/cor_rat_fm_mn.yml \
+  --exp rat_cogflow \
+  --method cogflow
+  --enable_dissipativity \
+  --dissipativity_weight 0.001
+```
+
 Latent-AR + MoFlow-style decoder:
 
 ```bash
@@ -274,7 +283,7 @@ python eval.py --cfg <config_path> --ckpt_path <checkpoint> [额外参数]
 ```bash
 python eval_rat.py \
   --cfg cfg/full_cfg/cor_rat_eval_mn.yml \
-  --ckpt_path results_rat/.../models/checkpoint_best.pt \
+  --ckpt_path /home/zhanghan/01_code/CogFlow/results_rat/cor_rat_fm_mn/decoder_baseline/rat_latent_ar_mlp_/models/checkpoint_best.pt \
   --method latent_ar \
   --decoder moflow_structured
 ```

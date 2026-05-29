@@ -11,7 +11,7 @@ future_frames                : 60
 agents                       : 8
 dt                           : 0.033
 checkpt_freq                 : 10
-data_dir: '/root/autodl-tmp/CogFlow/data/rat'
+data_dir: './data/rat'
 
 overfit: False
 n_train: 4144
@@ -89,7 +89,7 @@ MODEL:
     MODEL_OUT_DIM: 120
     REGRESSION_MLPS: [128, 256, 64, 2]
     CLASSIFICATION_MLPS: [128, 128, 1]
-    NUM_REGIMES: 2
+    NUM_REGIMES: 3
 
     USE_PE_QUERY: True
     USE_PE_AGENT: True
@@ -123,8 +123,8 @@ denoising_head_preds         : 20
 k_preds                      : 20
 
 # ------------------------------- Optimizer Parameters ---------------------------------
-train_batch_size             : 256
-test_batch_size              : 256
+train_batch_size             : 64
+test_batch_size              : 64
 
 OPTIMIZATION:
     NUM_EPOCHS: 600
