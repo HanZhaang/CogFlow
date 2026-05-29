@@ -7,6 +7,9 @@ import zipfile
 HISTORICAL_PRE_FILM = "historical_pre_film"
 LEGACY_BND_POST_FILM = "legacy_bnd_post_film"
 AUTO_M2_DECODER_STYLE = "auto"
+AUTO_SDE_CONTROL_STYLE = "auto"
+RAW_HISTORICAL_SDE_CONTROL = "raw_historical"
+ENCODED_SDE_CONTROL = "encoded"
 
 
 def detect_cogflow_m2_decoder_style_from_checkpoint(ckpt_path: str | None) -> str | None:
@@ -71,4 +74,44 @@ def configure_cogflow_m2_decoder_style(
     model_cfg.M2_DECODER_STYLE = style
     cfg.m2_decoder_style = style
     cfg.m2_decoder_style_source = source
+    return style, source
+
+
+def resolve_cogflow_sde_control_style(
+    *,
+    explicit_style: str | None,
+    decoder_style: str | None,
+) -> tuple[str, str]:
+    style = explicit_style or AUTO_SDE_CONTROL_STYLE
+    if style != AUTO_SDE_CONTROL_STYLE:
+        return style, "explicit"
+
+    if decoder_style == LEGACY_BND_POST_FILM:
+        return ENCODED_SDE_CONTROL, "decoder_style"
+    return RAW_HISTORICAL_SDE_CONTROL, "decoder_style"
+
+
+def configure_cogflow_sde_control_style(
+    cfg,
+    *,
+    explicit_style: str | None = None,
+) -> tuple[str, str]:
+    model_cfg = getattr(cfg, "MODEL", None)
+    if model_cfg is None:
+        return RAW_HISTORICAL_SDE_CONTROL, "default"
+
+    if explicit_style is None:
+        explicit_style = model_cfg.get("SDE_CONTROL_STYLE", AUTO_SDE_CONTROL_STYLE)
+
+    decoder_style = model_cfg.get(
+        "M2_DECODER_STYLE",
+        getattr(cfg, "m2_decoder_style", HISTORICAL_PRE_FILM),
+    )
+    style, source = resolve_cogflow_sde_control_style(
+        explicit_style=explicit_style,
+        decoder_style=decoder_style,
+    )
+    model_cfg.SDE_CONTROL_STYLE = style
+    cfg.sde_control_style = style
+    cfg.sde_control_style_source = source
     return style, source
