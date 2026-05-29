@@ -88,7 +88,7 @@ python train.py --cfg cfg/full_cfg/cor_rat_fm_mn.yml --exp rat_test --enable_dis
 ### Default babel
 
 ```bash
-python train.py --cfg cfg/release/babel.yml --exp babel_release
+python train.py --cfg cfg/full_cfg/cor_babel_fm_m1.yml --exp babel_release
 ```
 
 ## Evaluate
@@ -96,25 +96,18 @@ python train.py --cfg cfg/release/babel.yml --exp babel_release
 ### Generic evaluation
 
 ```bash
-python eval.py --cfg cfg/full_cfg/cor_rat_eval_mn.yml --ckpt_path weights/rat/checkpoint_best.pt
-python eval.py --cfg cfg/full_cfg/cor_babel_fm_m1.yml --ckpt_path weights/babel/checkpoint_best.pt
-```
-
-### Dataset wrappers
-
-```bash
-python eval_rat.py --cfg cfg/release/rat.yml --ckpt_path weights/rat/checkpoint_best.pt
-python eval_babel.py --cfg cfg/release/babel.yml --ckpt_path weights/babel/checkpoint_best.pt
+python eval.py --cfg cfg/full_cfg/cor_rat_eval_mn.yml 
+python eval.py --cfg cfg/full_cfg/cor_babel_fm_m1.yml
 ```
 
 ## Public Evaluation
 
-`pub_evaluation.py` is the shortest way to reproduce the released evaluation presets.
+`pub_evaluation.py` is a quick validation to reproduce the released evaluation presets.
 
 ### Default rat
 
 ```bash
-python pub_evaluation.py
+python pub_evaluation.py --npz_path cfg/full_cfg/npz/rat_cogflow.npz
 ```
 
 ### Default babel
