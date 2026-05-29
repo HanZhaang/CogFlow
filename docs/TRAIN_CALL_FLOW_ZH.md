@@ -5,7 +5,7 @@
 
 ## 1. 总览
 
-训练主入口在 [train.py](/Users/zhanghan/01_code/CogFlow/train.py)。
+训练主入口在 [train.py](./CogFlow/train.py)。
 
 完整调用链可以概括为：
 

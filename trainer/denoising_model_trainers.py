@@ -240,20 +240,64 @@ class Trainer(object):
             'scheduler': self.scheduler.state_dict(),
         }
         torch.save(data, os.path.join(self.cfg.model_dir, 'checkpoint_last.pt'))
+
+    def _resolve_ckpt_path(self, ckpt_name_or_path):
+        if ckpt_name_or_path is None:
+            raise ValueError("Checkpoint name/path must not be None")
+        if os.path.isfile(ckpt_name_or_path):
+            return ckpt_name_or_path
+        if ckpt_name_or_path.endswith('.pt'):
+            return os.path.join(self.cfg.model_dir, ckpt_name_or_path)
+        return os.path.join(self.cfg.model_dir, f'{ckpt_name_or_path}.pt')
+
+    def _load_state_dict_with_log(self, module, state_dict, *, strict=False, label="model"):
+        module_state = module.state_dict()
+        filtered_state = {}
+        shape_mismatches = []
+        for key, value in state_dict.items():
+            target = module_state.get(key)
+            if target is None:
+                filtered_state[key] = value
+                continue
+            if getattr(target, "shape", None) != getattr(value, "shape", None):
+                shape_mismatches.append((key, tuple(value.shape), tuple(target.shape)))
+                continue
+            filtered_state[key] = value
+
+        incompat = module.load_state_dict(filtered_state, strict=strict)
+        missing = list(getattr(incompat, "missing_keys", []))
+        unexpected = list(getattr(incompat, "unexpected_keys", []))
+        if len(shape_mismatches) > 0 or len(missing) > 0 or len(unexpected) > 0:
+            self.logger.warning(
+                "Checkpoint %s load used strict=%s with %d shape mismatches, %d missing and %d unexpected keys",
+                label,
+                strict,
+                len(shape_mismatches),
+                len(missing),
+                len(unexpected),
+            )
+            if len(shape_mismatches) > 0:
+                self.logger.warning("Shape mismatches (%s): %s", label, shape_mismatches[:20])
+            if len(missing) > 0:
+                self.logger.warning("Missing keys (%s): %s", label, missing[:20])
+            if len(unexpected) > 0:
+                self.logger.warning("Unexpected keys (%s): %s", label, unexpected[:20])
+        return incompat
     
     def load(self, ckpt_name):
         accelerator = self.accelerator
 
-        data = torch.load(os.path.join(self.cfg.model_dir, f'{ckpt_name}.pt'), map_location=self.device, weights_only=True)
+        ckpt_path = self._resolve_ckpt_path(ckpt_name)
+        data = torch.load(ckpt_path, map_location=self.device, weights_only=True)
 
         model = self.accelerator.unwrap_model(self.denoiser)
-        model.load_state_dict(data['model'], strict=False)
+        self._load_state_dict_with_log(model, data['model'], strict=False, label='model')
 
         self.step = data['step']
         # self.opt.load_state_dict(data['opt'], strict=False)
         if self.accelerator.is_main_process:
             # pass
-            self.ema.load_state_dict(data["ema"], strict=False)
+            self._load_state_dict_with_log(self.ema, data["ema"], strict=False, label='ema')
 
         if 'version' in data:
             print(f"loading from version {data['version']}")
@@ -457,9 +501,9 @@ class Trainer(object):
         ckpt_states = torch.load(self.cfg.ckpt_path, map_location=self.device, weights_only=True)
 
         self.denoiser = self.accelerator.unwrap_model(self.denoiser)
-        self.denoiser.load_state_dict(ckpt_states['model'], strict=False)
+        self._load_state_dict_with_log(self.denoiser, ckpt_states['model'], strict=False, label='model')
         if self.accelerator.is_main_process:
-            self.ema.load_state_dict(ckpt_states["ema"], strict=False)
+            self._load_state_dict_with_log(self.ema, ckpt_states["ema"], strict=False, label='ema')
   
         # testing_mode=False, training_err_check=False
         if eval_on_train:
@@ -485,9 +529,9 @@ class Trainer(object):
                                      weights_only=True)
 
         self.denoiser = self.accelerator.unwrap_model(self.denoiser)
-        self.denoiser.load_state_dict(ckpt_states['model'])
+        self._load_state_dict_with_log(self.denoiser, ckpt_states['model'], strict=False, label='model')
         if self.accelerator.is_main_process:
-            self.ema.load_state_dict(ckpt_states["ema"])
+            self._load_state_dict_with_log(self.ema, ckpt_states["ema"], strict=False, label='ema')
 
         # predict_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
         deltas = [i for i in range(-15, 15, 3)]

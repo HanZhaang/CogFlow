@@ -23,7 +23,7 @@ eval_on_train: False
 checkpt_freq: 5
 max_num_ckpts: 5
 load_pretrained: False
-ckpt_path: '/root/CogFlow/results_babel/cor_babel_fm_m1/m3_drift_diffusion/models/checkpoint_best.pt'
+ckpt_path: '/home/zhanghan/01_code/CogFlow/results_babel/cor_babel_fm_m1_std/m3_drift_diffusion/models/checkpoint_best.pt'
 
 # ---------------- pub hyper para ----------------
 
