@@ -49,15 +49,15 @@ def parse_config():
 		'--m2-decoder-style',
 		type=str,
 		choices=[AUTO_M2_DECODER_STYLE, HISTORICAL_PRE_FILM, LEGACY_BND_POST_FILM],
-		default=None,
-		help="Override M2 decoder path style or auto-detect from checkpoint.",
+		default="auto",
+		help="FiLM before or after attn",
 	)
 	parser.add_argument(
 		'--sde-control-style',
 		type=str,
 		choices=[AUTO_SDE_CONTROL_STYLE, RAW_HISTORICAL_SDE_CONTROL, ENCODED_SDE_CONTROL],
-		default=None,
-		help="Override SDE control path style. Use 'encoded' with historical_pre_film to get old attention plus cmd-encoded controls.",
+		default="encoded",
+		help="Use 'encoded' with historical_pre_film to get cmd-encoded controls.",
 	)
 	parser.add_argument('--enable_dissipativity', action='store_true', help="Enable boundedness loss (legacy alias)")
 	parser.add_argument('--dissipativity_weight', type=float, default=None, help="Boundedness loss weight override (legacy alias)")
