@@ -23,18 +23,20 @@ def modulate(x, shift, scale):
     
 
 class MTRDecoder(nn.Module):
-    def __init__(self, config, use_pre_norm, use_adaln=True):
+    def __init__(self, config, use_pre_norm, use_adaln=True, k_mixer_style: str = "transformer"):
         super().__init__()
         self.num_blocks = config.get('NUM_DECODER_BLOCKS', 2)
         self.ablation_mode = config.get('CNSDE', 'm1')
+        self.k_mixer_style = k_mixer_style
         self.self_attn_K = nn.ModuleList([])
         self.self_attn_A = nn.ModuleList([])
         dropout = config.get('DROPOUT_OF_ATTN', 0.1)
+        ff_mult = 2 if self.k_mixer_style == "proposal_mixer" else 4
         template_encoder = nn.TransformerEncoderLayer(
             d_model=config.D_MODEL,
             dropout=dropout,
             nhead=config.NUM_ATTN_HEAD,
-            dim_feedforward=config.D_MODEL * 2,
+            dim_feedforward=config.D_MODEL * ff_mult,
             norm_first=use_pre_norm,
             batch_first=True,
         )
@@ -47,7 +49,10 @@ class MTRDecoder(nn.Module):
             self.t_adaLN = nn.ModuleList([])
 
         for _ in range(self.num_blocks):
-            self.self_attn_K.append(ProposalMixer(config.D_MODEL, dropout))
+            if self.k_mixer_style == "proposal_mixer":
+                self.self_attn_K.append(ProposalMixer(config.D_MODEL, dropout))
+            else:
+                self.self_attn_K.append(copy.deepcopy(template_encoder))
             self.self_attn_A.append(copy.deepcopy(template_encoder))
 
             if use_adaln:
@@ -74,10 +79,11 @@ class MTRDecoder(nn.Module):
 
             # K-to-K self-attention
             # print("cur_query shape 1 = {}".format(cur_query.shape))
-            if len(cur_query.shape) == 5:
-                cur_query = rearrange(cur_query, 'b k a t d -> (b a t) k d')
+            token_for_k = cur_query if self.k_mixer_style == "proposal_mixer" else query_token
+            if len(token_for_k.shape) == 5:
+                cur_query = rearrange(token_for_k, 'b k a t d -> (b a t) k d')
             else:
-                cur_query = rearrange(cur_query, 'b k a d -> (b a) k d')
+                cur_query = rearrange(token_for_k, 'b k a d -> (b a) k d')
             cur_query = self.self_attn_K[i](cur_query)
 
             # A-to-A self-attention

@@ -11,6 +11,12 @@ import models  # noqa: F401
 import trainer  # noqa: F401
 
 from utils.config import Config
+from utils.checkpoint_compat import (
+	AUTO_M2_DECODER_STYLE,
+	HISTORICAL_PRE_FILM,
+	LEGACY_BND_POST_FILM,
+	configure_cogflow_m2_decoder_style,
+)
 from utils.utils import back_up_code_git, set_random_seed, log_config_to_file
 
 from models.model_registry import build_network
@@ -35,6 +41,13 @@ def parse_config():
 	parser.add_argument('--decoder', type=str, choices=['moflow_structured', 'mlp'], help="Decoder backend")
 	parser.add_argument('--action_fusion', type=str, choices=['none', 'cross_attention'], help="Action fusion backend")
 	parser.add_argument('--num-regime', type=int, default=None, help="Number of regimes for ControlledSSLSDE")
+	parser.add_argument(
+		'--m2-decoder-style',
+		type=str,
+		choices=[AUTO_M2_DECODER_STYLE, HISTORICAL_PRE_FILM, LEGACY_BND_POST_FILM],
+		default=None,
+		help="Override M2 decoder path style or auto-detect from checkpoint.",
+	)
 	parser.add_argument('--enable_dissipativity', action='store_true', help="Enable boundedness loss (legacy alias)")
 	parser.add_argument('--dissipativity_weight', type=float, default=None, help="Boundedness loss weight override (legacy alias)")
 
@@ -84,6 +97,11 @@ def apply_runtime_overrides(cfg, args):
 	action_fusion_cfg.INCLUDE_HISTORY = bool(action_fusion_cfg.get('INCLUDE_HISTORY', True))
 	action_fusion_cfg.USE_RAW_CTRL_RESIDUAL = bool(action_fusion_cfg.get('USE_RAW_CTRL_RESIDUAL', True))
 	cfg.MODEL.ACTION_FUSION = action_fusion_cfg
+	configure_cogflow_m2_decoder_style(
+		cfg,
+		explicit_style=getattr(args, 'm2_decoder_style', None),
+		ckpt_path=cfg.get('ckpt_path', None),
+	)
 
 	if method_name == 'cogflow':
 		cfg.trainer_name = 'cogflow'

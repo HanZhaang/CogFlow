@@ -10,6 +10,12 @@ import models  # noqa: F401
 import trainer  # noqa: F401
 
 from utils.config import Config
+from utils.checkpoint_compat import (
+    AUTO_M2_DECODER_STYLE,
+    HISTORICAL_PRE_FILM,
+    LEGACY_BND_POST_FILM,
+    configure_cogflow_m2_decoder_style,
+)
 from utils.utils import set_random_seed, log_config_to_file
 from train import apply_runtime_overrides
 from data.dataset_registry import build_data_loader
@@ -48,6 +54,13 @@ def add_eval_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument('--decoder', type=str, choices=['moflow_structured', 'mlp'], help='Decoder backend override.')
     parser.add_argument('--action_fusion', type=str, choices=['none', 'cross_attention'], help='Action fusion backend override.')
     parser.add_argument('--num-regime', type=int, default=None, help='ControlledSSLSDE regime count override.')
+    parser.add_argument(
+        '--m2-decoder-style',
+        type=str,
+        choices=[AUTO_M2_DECODER_STYLE, HISTORICAL_PRE_FILM, LEGACY_BND_POST_FILM],
+        default=None,
+        help='Override M2 decoder path style or auto-detect from checkpoint.',
+    )
     parser.add_argument('--enable_dissipativity', action='store_true', help='Enable dissipativity constraint.')
     parser.add_argument('--dissipativity_weight', type=float, default=None, help='Dissipativity weight override.')
     return parser
@@ -95,6 +108,11 @@ def apply_eval_overrides(cfg, args):
     if args.rotate:
         cfg.rotate = True
     cfg.eval_on_train = args.eval_on_train
+    configure_cogflow_m2_decoder_style(
+        cfg,
+        explicit_style=getattr(args, 'm2_decoder_style', None),
+        ckpt_path=cfg.get('ckpt_path', None),
+    )
 
     tag = '_'
     if cfg.get('denoising_method', None) == 'fm':

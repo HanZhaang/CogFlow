@@ -12,6 +12,7 @@ from models.context_encoder.mtr_encoder import SinusoidalPosEmb
 from models.context_encoder.condition_encoder import ZEncoder, ZFiLM
 from models.neural_sde.ctr_sde import simulate_sde_paths, ControlledSSLSDE
 from models.neural_sde.z0_encoder import Z0Encoder
+from utils.checkpoint_compat import HISTORICAL_PRE_FILM, LEGACY_BND_POST_FILM
 
 
 class MotionTransformer(nn.Module):
@@ -28,6 +29,12 @@ class MotionTransformer(nn.Module):
         self.ablation_mode = self.config.CNSDE
         self.time_chunk_size = int(self.model_cfg.get('DECODER_TIME_CHUNK', 0))
         self.num_regimes = int(self.model_cfg.get('NUM_REGIMES', self.config.get('num_regime', 3)))
+        self.m2_decoder_style = str(
+            self.model_cfg.get('M2_DECODER_STYLE', self.config.get('m2_decoder_style', HISTORICAL_PRE_FILM))
+        )
+        if self.m2_decoder_style not in {HISTORICAL_PRE_FILM, LEGACY_BND_POST_FILM}:
+            raise ValueError(f"Unknown M2 decoder style: {self.m2_decoder_style}")
+        self.use_legacy_bnd_decoder = self.ablation_mode == "m2" and self.m2_decoder_style == LEGACY_BND_POST_FILM
         assert not use_pre_norm, "Pre-norm is not supported in this model"
         self.T_f = self.config.get('future_frames', 0)
         self.dt = self.config.get('dt', 0)
@@ -91,12 +98,13 @@ class MotionTransformer(nn.Module):
             self.z_seq_proj =  nn.Linear(self.model_cfg.get('COG_D_Z', 0), self.dim)
             self.z_seq_gamma = nn.Linear(self.dim, self.dim)
             self.z_seq_beta = nn.Linear(self.dim, self.dim)
-            self.temporal_readout_mlp = nn.Sequential(
-                nn.Linear(self.dim, self.dim),
-                nn.LayerNorm(self.dim),
-                nn.ReLU(),
-                nn.Linear(self.dim, self.dim),
-            )
+            if self.use_legacy_bnd_decoder:
+                self.temporal_readout_mlp = nn.Sequential(
+                    nn.Linear(self.dim, self.dim),
+                    nn.LayerNorm(self.dim),
+                    nn.ReLU(),
+                    nn.Linear(self.dim, self.dim),
+                )
 
             in_fuse = (self.dim            # encoder_out
             + (self.dim*1)      # time_dim
@@ -157,7 +165,14 @@ class MotionTransformer(nn.Module):
             nn.Linear(dim_decoder, self.model_cfg.MODEL_OUT_DIM),
         )
 
-        self.motion_decoder = nn.Identity() if self.use_mlp_decoder else build_decoder(self.model_cfg.MOTION_DECODER, use_pre_norm)
+        decoder_kwargs = {}
+        if not self.use_mlp_decoder:
+            decoder_kwargs["k_mixer_style"] = "proposal_mixer" if self.use_legacy_bnd_decoder else "transformer"
+        self.motion_decoder = (
+            nn.Identity()
+            if self.use_mlp_decoder
+            else build_decoder(self.model_cfg.MOTION_DECODER, use_pre_norm, **decoder_kwargs)
+        )
 
         self.reg_head = build_mlps(c_in=self.dim, mlp_channels=self.model_cfg.REGRESSION_MLPS, ret_before_act=True, without_norm=True)
         self.cls_head = build_mlps(c_in=dim_decoder, mlp_channels=self.model_cfg.CLASSIFICATION_MLPS, ret_before_act=True, without_norm=True)
@@ -169,6 +184,7 @@ class MotionTransformer(nn.Module):
         params_total = sum(p.numel() for p in self.parameters())
         params_other = params_total - params_encoder - params_decoder
         logger.info(f"CogFlow decoder: {self.decoder_name}")
+        logger.info(f"CogFlow m2 decoder style: {self.m2_decoder_style}")
         logger.info("Total parameters: {:,}, Encoder: {:,}, Decoder: {:,}, Other: {:,}".format(
             params_total, params_encoder, params_decoder, params_other
         ))
@@ -236,6 +252,8 @@ class MotionTransformer(nn.Module):
         beta: torch.Tensor,
         t_emb: torch.Tensor,
     ) -> torch.Tensor:
+        if not self.use_legacy_bnd_decoder:
+            raise RuntimeError("_decode_m2_with_time_chunk is only valid for legacy_bnd_post_film mode")
         base_readout = self.motion_decoder(query_token, t_emb).unsqueeze(3)
         chunk_size = self.time_chunk_size
         if chunk_size <= 0 or self.T_f <= chunk_size:
@@ -377,8 +395,13 @@ class MotionTransformer(nn.Module):
             else:
                 z_seq, _ = rollout_out
             z_frame = self.z_seq_proj(z_seq)
-            gamma = self.z_seq_gamma(z_frame)  # [B,T_f,D]
-            beta = self.z_seq_beta(z_frame)  # [B,T_f,D]
+            if self.use_legacy_bnd_decoder:
+                gamma = self.z_seq_gamma(z_frame)  # [B,T_f,D]
+                beta = self.z_seq_beta(z_frame)  # [B,T_f,D]
+            else:
+                z_frame_bka = z_frame[:, None, None, :, :].expand(B, K, A, self.T_f, self.dim)
+                gamma = self.z_seq_gamma(z_frame_bka)  # [B,K,A,T_f,D]
+                beta = self.z_seq_beta(z_frame_bka)  # [B,K,A,T_f,D]
             
         # 到这里位置没有问题，下面如何进行特征融合？
         
@@ -429,14 +452,27 @@ class MotionTransformer(nn.Module):
         
         # # 11-24 尝试在此处融合，效果显著，出于对比考虑修改
         if self.ablation_mode == "m2":
-            query_token = self.post_pe_cat_mlp(self.apply_PE(emb_fusion, k_pe_batch, a_pe_batch))
-            denoiser_x = self._decode_m2_with_time_chunk(
-                query_token=query_token,
-                gamma=gamma,
-                beta=beta,
-                t_emb=t_emb,
-            )
-            denoiser_x = rearrange(denoiser_x, 'b k a t d -> b k a (t d)')
+            if self.use_legacy_bnd_decoder:
+                query_token = self.post_pe_cat_mlp(self.apply_PE(emb_fusion, k_pe_batch, a_pe_batch))
+                denoiser_x = self._decode_m2_with_time_chunk(
+                    query_token=query_token,
+                    gamma=gamma,
+                    beta=beta,
+                    t_emb=t_emb,
+                )
+                denoiser_x = rearrange(denoiser_x, 'b k a t d -> b k a (t d)')
+            else:
+                emb_fusion = emb_fusion.unsqueeze(3).repeat(1, 1, 1, self.T_f, 1)
+                emb_fusion = emb_fusion * (1 + gamma) + beta
+                a_pe_time = a_pe_batch.unsqueeze(3).repeat(1, 1, 1, self.T_f, 1)
+                k_pe_time = k_pe_batch.unsqueeze(3).repeat(1, 1, 1, self.T_f, 1)
+                query_token = self.post_pe_cat_mlp(self.apply_PE(emb_fusion, k_pe_time, a_pe_time))
+                if self.use_mlp_decoder:
+                    denoiser_x = self.reg_head(query_token)
+                else:
+                    readout_token = self.motion_decoder(query_token, t_emb)
+                    denoiser_x = self.reg_head(readout_token)
+                denoiser_x = rearrange(denoiser_x, 'b k a t d -> b k a (t d)')
         else:
             query_token = self.post_pe_cat_mlp(self.apply_PE(emb_fusion, k_pe_batch, a_pe_batch)) 								# [B, K, A, D]
             if self.use_mlp_decoder:
