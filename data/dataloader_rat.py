@@ -91,6 +91,7 @@ class RatDatasetMinMax(Dataset):
     def __init__(self,
                  obs_len=12, pred_len=18, training=True,
                  num_scenes=None, test_scenes=None,
+                 split=None,
                  overfit=False, imle=False, cfg=None, rotate=False,
                  data_dir='data/rat', data_file='',
                  data_norm='min_max'):
@@ -105,19 +106,21 @@ class RatDatasetMinMax(Dataset):
         self.head_idx = 5
         self.neck_idx = 6
 
+        eval_split = split or 'test'
+
         if not overfit:
             if training:
                 data_root = os.path.join(data_dir, 'rat_pose_train.npy')
                 cmd_root = os.path.join(data_dir, 'rat_stim_train.npy')
             else:
-                data_root = _first_existing_path(
-                    os.path.join(data_dir, 'rat_pose_test.npy'),
-                    os.path.join(data_dir, 'rat_pose_val.npy'),
-                )
-                cmd_root = _first_existing_path(
-                    os.path.join(data_dir, 'rat_stim_test.npy'),
-                    os.path.join(data_dir, 'rat_stim_val.npy'),
-                )
+                if eval_split == 'val':
+                    data_root = os.path.join(data_dir, 'rat_pose_val.npy')
+                    cmd_root = os.path.join(data_dir, 'rat_stim_val.npy')
+                elif eval_split == 'test':
+                    data_root = os.path.join(data_dir, 'rat_pose_test.npy')
+                    cmd_root = os.path.join(data_dir, 'rat_stim_test.npy')
+                else:
+                    raise ValueError(f"Unsupported split for rat dataset: {eval_split}")
         else:
             data_root = os.path.join(data_dir, 'rat_pose_train.npy')
             cmd_root = os.path.join(data_dir, 'rat_stim_train.npy')
@@ -528,6 +531,9 @@ def build_rat_dataloader(cfg, args):
     Rat dataset dataloader builder (MinMax normalized).
     """
 
+    eval_split = 'val' if getattr(cfg, 'train_mode', True) else 'test'
+    eval_scene_count = cfg.get('n_val', cfg.n_test) if eval_split == 'val' else cfg.n_test
+
     train_dset = RatDatasetMinMax(
         data_dir=cfg.data_dir,
         obs_len=cfg.past_frames,
@@ -556,7 +562,8 @@ def build_rat_dataloader(cfg, args):
             obs_len=cfg.past_frames,
             pred_len=cfg.future_frames,
             training=False,
-            test_scenes=cfg.n_test,
+            test_scenes=eval_scene_count,
+            split=eval_split,
             overfit=cfg.overfit,
             cfg=cfg,
             data_norm=cfg.data_norm

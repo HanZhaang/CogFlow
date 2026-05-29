@@ -73,6 +73,7 @@ class BabelDatasetMinMax(Dataset):
     def __init__(self,
                  obs_len=12, pred_len=18, training=True,
                  num_scenes=None, test_scenes=None,
+                 split=None,
                  overfit=False, imle=False, cfg=None,
                  data_dir='data/babel', data_file='hist10pred20/rat_train.npy',
                  data_norm='min_max'):
@@ -87,13 +88,21 @@ class BabelDatasetMinMax(Dataset):
         self.head_idx = 5
         self.neck_idx = 6
 
+        eval_split = split or 'test'
+
         if not overfit:
             if training:
                 data_root = os.path.join(data_dir, 'babel_train.npy')
                 cmd_root = os.path.join(data_dir, 'babel_train_cmd.npy')
             else:
-                data_root = os.path.join(data_dir, 'babel_val.npy')
-                cmd_root = os.path.join(data_dir, 'babel_val_cmd.npy')
+                if eval_split == 'val':
+                    data_root = os.path.join(data_dir, 'babel_val.npy')
+                    cmd_root = os.path.join(data_dir, 'babel_val_cmd.npy')
+                elif eval_split == 'test':
+                    data_root = os.path.join(data_dir, 'babel_test.npy')
+                    cmd_root = os.path.join(data_dir, 'babel_test_cmd.npy')
+                else:
+                    raise ValueError(f"Unsupported split for babel dataset: {eval_split}")
         else:
             data_root = os.path.join(data_dir, 'babel_val.npy')
             cmd_root = os.path.join(data_dir, 'babel_val_cmd.npy')
@@ -405,6 +414,9 @@ def build_babel_dataloader(cfg, args):
 	"""
 	Build the data loader for the Rat dataset.
 	"""
+	eval_split = 'val' if getattr(cfg, 'train_mode', True) else 'test'
+	eval_scene_count = cfg.get('n_val', cfg.n_test) if eval_split == 'val' else cfg.n_test
+
 	train_dset = BabelDatasetMinMax(
 		data_dir=cfg.data_dir,
 		obs_len=cfg.past_frames,
@@ -420,7 +432,7 @@ def build_babel_dataloader(cfg, args):
 		train_dset,
 		batch_size=cfg.train_batch_size,
 		shuffle=True,
-		num_workers=4,
+		num_workers=cfg.num_workers,
 		collate_fn=seq_collate_rat,
 		pin_memory=True)
 
@@ -433,7 +445,8 @@ def build_babel_dataloader(cfg, args):
 		pred_len=cfg.future_frames,
 		training=False,
 		overfit=cfg.overfit,
-		test_scenes=cfg.n_test,
+		test_scenes=eval_scene_count,
+		split=eval_split,
 		cfg=cfg,
 		# rotate=cfg.rotate,
 		data_norm=cfg.data_norm)
@@ -442,7 +455,7 @@ def build_babel_dataloader(cfg, args):
 		test_dset,
 		batch_size=cfg.test_batch_size, ### change it from 500 
 		shuffle=False,
-		num_workers=4,
+		num_workers=cfg.num_workers,
 		collate_fn=seq_collate_rat,
 		pin_memory=True)
 	
