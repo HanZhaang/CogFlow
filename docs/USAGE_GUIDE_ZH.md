@@ -166,7 +166,7 @@ python train.py \
 
 ### 2.4 自动遍历所有 variant 和 decoder 组合
 
-最稳的方式是直接遍历 [cfg/baselines/rat](/Users/zhanghan/01_code/CogFlow/cfg/baselines/rat) 目录下的预设配置，而不是在循环里临时拼接大量 CLI 覆盖参数。
+最稳的方式是直接遍历 [cfg/baselines/rat](../cfg/baselines/rat) 目录下的预设配置，而不是在循环里临时拼接大量 CLI 覆盖参数。
 
 遍历当前目录下全部预设：
 
@@ -283,7 +283,7 @@ python eval.py --cfg <config_path> --ckpt_path <checkpoint> [额外参数]
 ```bash
 python eval_rat.py \
   --cfg cfg/full_cfg/cor_rat_eval_mn.yml \
-  --ckpt_path /home/zhanghan/01_code/CogFlow/results_rat/cor_rat_fm_mn/decoder_baseline/rat_latent_ar_mlp_/models/checkpoint_best.pt \
+  --ckpt_path results_rat/cor_rat_fm_mn/decoder_baseline/rat_latent_ar_mlp_/models/checkpoint_best.pt \
   --method latent_ar \
   --decoder moflow_structured
 ```

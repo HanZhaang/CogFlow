@@ -11,7 +11,7 @@ future_frames                : 60
 agents                       : 22
 dt                           : 0.033
 checkpt_freq                 : 10
-data_dir: '/root/autodl-tmp/CogFlow/data/babel_3060'
+data_dir: './data/babel_3060'
 
 overfit: False
 n_train: 9409

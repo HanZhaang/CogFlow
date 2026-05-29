@@ -1,103 +1,177 @@
 # SPDX-License-Identifier: MIT
 import argparse
+import json
 from pathlib import Path
+from typing import Dict, Optional, Sequence, Union
+
+import numpy as np
+
+from utils.pred_future_io import load_pred_fut
+
+ArrayLike = Union[np.ndarray]
 
 
-PRESETS = {
-    "rat": {
-        "cfg": "cfg/release/rat.yml",
-        "ckpt_path": "weights/rat/checkpoint_best.pt",
-        "sampling_steps": 10,
-        "solver": "euler",
-    },
-    "babel": {
-        "cfg": "cfg/release/babel.yml",
-        "ckpt_path": "weights/babel/checkpoint_best.pt",
-        "sampling_steps": 10,
-        "solver": "euler",
-    },
-    "rat_bnd": {
-        "cfg": "cfg/release/rat_bnd.yml",
-        "ckpt_path": "weights/rat_bnd/checkpoint_best.pt",
-        "sampling_steps": 100,
-        "solver": "lin_poly",
-        "lin_poly_p": 5,
-        "lin_poly_long_step": 1000,
-    },
-}
+def _to_numpy(x: ArrayLike) -> np.ndarray:
+    if isinstance(x, np.ndarray):
+        return x
+    if hasattr(x, "detach") and hasattr(x, "cpu") and hasattr(x, "numpy"):
+        return x.detach().cpu().numpy()
+    raise TypeError(f"Unsupported type: {type(x)}")
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Public evaluation presets for CogFlow release.")
-    parser.add_argument("--preset", choices=sorted(PRESETS), default="rat")
-    parser.add_argument("--cfg", type=str, default=None, help="Optional config override.")
-    parser.add_argument("--ckpt_path", type=str, default=None, help="Optional checkpoint override.")
-    parser.add_argument("--data_dir", type=str, default=None, help="Optional dataset root override.")
-    parser.add_argument("--batch_size", type=int, default=None)
-    parser.add_argument("--num_workers", type=int, default=None)
-    parser.add_argument("--sampling_steps", type=int, default=None)
-    parser.add_argument("--solver", choices=["euler", "lin_poly"], default=None)
-    parser.add_argument("--lin_poly_p", type=int, default=None)
-    parser.add_argument("--lin_poly_long_step", type=int, default=None)
-    parser.add_argument("--save_samples", action="store_true", default=False)
-    parser.add_argument("--eval_on_train", action="store_true", default=False)
-    parser.add_argument("--fix_random_seed", action="store_true", default=False)
-    parser.add_argument("--seed", type=int, default=42)
+def evaluate_predictions(
+    pred: ArrayLike,
+    fut: ArrayLike,
+    horizons: Optional[Sequence[int]] = None,
+    eps: float = 1e-12,
+) -> Dict[str, np.ndarray]:
+    pred_np = _to_numpy(pred).astype(np.float64, copy=False)
+    fut_np = _to_numpy(fut).astype(np.float64, copy=False)
+
+    bsz, k_modes, n_agents, future_frames, coord_dim = pred_np.shape
+    if fut_np.shape != (bsz, n_agents, future_frames, coord_dim):
+        raise ValueError(f"Shape mismatch: pred {pred_np.shape} vs fut {fut_np.shape}")
+
+    if horizons is None:
+        horizons = [future_frames]
+    else:
+        horizons = list(horizons)
+        for horizon in horizons:
+            if not (1 <= horizon <= future_frames):
+                raise ValueError(
+                    f"horizon must be in [1, {future_frames}]. Got {horizon}"
+                )
+
+    fut_expanded = fut_np[:, None, :, :, :]
+    dist = np.sqrt(np.maximum(np.sum((pred_np - fut_expanded) ** 2, axis=-1), eps))
+    dist_flat = dist.transpose(0, 2, 1, 3).reshape(bsz * n_agents, k_modes, future_frames)
+
+    def _metrics_at_horizon(horizon: int):
+        ade_k = dist_flat[:, :, :horizon].mean(axis=-1)
+        fde_k = dist_flat[:, :, horizon - 1]
+
+        ade_min = ade_k.min(axis=1).mean()
+        fde_min = fde_k.min(axis=1).mean()
+        ade_avg = ade_k.mean(axis=1).mean()
+        fde_avg = fde_k.mean(axis=1).mean()
+
+        pred_end = pred_np[:, :, :, horizon - 1, :].transpose(0, 2, 1, 3).reshape(
+            bsz * n_agents, k_modes, coord_dim
+        )
+        if k_modes <= 1:
+            diversity = 0.0
+        else:
+            x2 = np.sum(pred_end * pred_end, axis=-1, keepdims=True)
+            gram = pred_end @ pred_end.transpose(0, 2, 1)
+            d2 = np.maximum(x2 + x2.transpose(0, 2, 1) - 2.0 * gram, 0.0)
+            triu = np.triu_indices(k_modes, k=1)
+            diversity = np.sqrt(d2[:, triu[0], triu[1]] + eps).mean()
+
+        return ade_min, fde_min, ade_avg, fde_avg, diversity
+
+    ade_min_ls, fde_min_ls, ade_avg_ls, fde_avg_ls, div_ls = [], [], [], [], []
+    for horizon in horizons:
+        ade_min, fde_min, ade_avg, fde_avg, diversity = _metrics_at_horizon(horizon)
+        ade_min_ls.append(ade_min)
+        fde_min_ls.append(fde_min)
+        ade_avg_ls.append(ade_avg)
+        fde_avg_ls.append(fde_avg)
+        div_ls.append(diversity)
+
+    return {
+        "ADE_min": np.array(ade_min_ls, dtype=np.float64),
+        "FDE_min": np.array(fde_min_ls, dtype=np.float64),
+        "ADE_avg": np.array(ade_avg_ls, dtype=np.float64),
+        "FDE_avg": np.array(fde_avg_ls, dtype=np.float64),
+        "Diversity": np.array(div_ls, dtype=np.float64),
+        "num_trajs": np.array(bsz * n_agents, dtype=np.int64),
+        "K": np.array(k_modes, dtype=np.int64),
+        "F": np.array(future_frames, dtype=np.int64),
+        "D": np.array(coord_dim, dtype=np.int64),
+        "horizons": np.array(horizons, dtype=np.int64),
+    }
+
+
+def _default_horizons(total_frames: int) -> Sequence[int]:
+    if total_frames >= 10 and total_frames % 10 == 0:
+        return list(range(10, total_frames + 1, 10))
+    return [total_frames]
+
+
+def performance_to_serializable(
+    performance: Dict[str, np.ndarray]
+) -> Dict[str, Union[int, float, list]]:
+    out = {}
+    for key, value in performance.items():
+        if isinstance(value, np.ndarray):
+            out[key] = value.item() if value.ndim == 0 else value.tolist()
+        else:
+            out[key] = value
+    return out
+
+
+def print_performance(performance: Dict[str, np.ndarray]) -> None:
+    horizons = performance["horizons"].tolist()
+    ade_min = performance["ADE_min"].tolist()
+    fde_min = performance["FDE_min"].tolist()
+    ade_avg = performance["ADE_avg"].tolist()
+    fde_avg = performance["FDE_avg"].tolist()
+    diversity = performance["Diversity"].tolist()
+
+    print(
+        f"num_trajs={int(performance['num_trajs'])} "
+        f"K={int(performance['K'])} F={int(performance['F'])} D={int(performance['D'])}"
+    )
+    for horizon, ade_m, fde_m, ade_a, fde_a, div in zip(
+        horizons, ade_min, fde_min, ade_avg, fde_avg, diversity
+    ):
+        print(
+            "horizon={:>3d} | ADE_min={:.6f} | FDE_min={:.6f} | "
+            "ADE_avg={:.6f} | FDE_avg={:.6f} | Diversity={:.6f}".format(
+                int(horizon), ade_m, fde_m, ade_a, fde_a, div
+            )
+        )
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Offline public evaluation for saved prediction npz files."
+    )
+    parser.add_argument("--npz_path", required=True, help="Path to the saved prediction npz.")
+    parser.add_argument(
+        "--horizons",
+        nargs="*",
+        type=int,
+        default=None,
+        help="Evaluation horizons in frames. Default: auto infer as 10,20,...,F when possible.",
+    )
+    parser.add_argument(
+        "--output_json",
+        type=str,
+        default=None,
+        help="Optional path to dump metrics as JSON.",
+    )
     return parser.parse_args()
 
 
-def build_eval_namespace(args):
-    preset = PRESETS[args.preset]
-    ckpt_path = args.ckpt_path or preset["ckpt_path"]
-    if not Path(ckpt_path).exists():
-        raise FileNotFoundError(
-            f"Checkpoint not found: {ckpt_path}. "
-            "Download the public weight bundle and place it under the default weights directory, "
-            "or pass --ckpt_path explicitly."
-        )
-
-    return argparse.Namespace(
-        ckpt_path=ckpt_path,
-        cfg=args.cfg or preset["cfg"],
-        exp="public_release",
-        save_samples=args.save_samples,
-        eval_on_train=args.eval_on_train,
-        batch_size=args.batch_size,
-        data_dir=args.data_dir,
-        n_train=None,
-        n_test=None,
-        rotate=False,
-        data_norm=None,
-        data_source=None,
-        subset=None,
-        rotate_time_frame=None,
-        num_workers=args.num_workers,
-        fix_random_seed=args.fix_random_seed,
-        seed=args.seed,
-        sampling_steps=args.sampling_steps or preset["sampling_steps"],
-        solver=args.solver or preset["solver"],
-        lin_poly_p=args.lin_poly_p or preset.get("lin_poly_p", 2),
-        lin_poly_long_step=args.lin_poly_long_step or preset.get("lin_poly_long_step", 1000),
-        method="cogflow",
-        variant=None,
-        decoder=None,
-        action_fusion=None,
-        num_regime=None,
-        m2_decoder_style="historical_pre_film",
-        sde_control_style="encoded",
-        enable_dissipativity=False,
-        dissipativity_weight=None,
-    )
-
-
-def main():
+def main() -> None:
     args = parse_args()
-    from eval_utils import run_evaluation
+    bundle = load_pred_fut(args.npz_path)
+    pred = bundle["pred"]
+    fut = bundle["fut"]
+    total_frames = pred.shape[-2]
+    horizons = args.horizons if args.horizons else _default_horizons(total_frames)
+    performance = evaluate_predictions(pred, fut, horizons=horizons)
+    print_performance(performance)
 
-    eval_args = build_eval_namespace(args)
-    run_evaluation(eval_args)
+    if args.output_json:
+        output_path = Path(args.output_json)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(
+            json.dumps(performance_to_serializable(performance), indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
 
 
 if __name__ == "__main__":
     main()
-

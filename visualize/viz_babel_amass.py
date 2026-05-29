@@ -12,9 +12,9 @@ import imageio.v2 as imageio
 from pathlib import Path
 
 # ===================== 配置区域 =====================
-BABEL_JSON_PATH = r"D:\07_data\BABEL\train.json"  # 修改成你的 BABEL json
-AMASS_ROOT = Path(r"D:\04_code\HumanML3D\amass_data")                 # 修改成你的 AMASS 根目录
-SMPLX_MODEL_PATH = r"D:\04_code\HumanML3D\smplx"          # 修改成你的 SMPL(H) 模型目录
+BABEL_JSON_PATH = Path("./external/babel/train.json")
+AMASS_ROOT = Path("./external/amass")
+SMPLX_MODEL_PATH = "./external/smplx"
 BABEL_SID = "5788"                                  # 就用你给的这条样例
 # ==================================================
 
@@ -311,7 +311,7 @@ def main():
 
     # 5. 可视化一条样本
     # visualize_sample(joints_3d, frame_labels, sid=BABEL_SID)
-    video_out_path = r"D:\04_code\MoFlow\visualize\result\viz_babel\vid.mp4"
+    video_out_path = "./visualize/result/viz_babel/vid.mp4"
     save_skeleton_video(joints_3d, frame_labels, sid=BABEL_SID, out_path=video_out_path)
 
 if __name__ == "__main__":

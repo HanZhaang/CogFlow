@@ -5,7 +5,7 @@
 
 ## 1. 总览
 
-训练主入口在 [train.py](./CogFlow/train.py)。
+训练主入口在 [train.py](../train.py)。
 
 完整调用链可以概括为：
 
@@ -30,7 +30,7 @@ parse_config
 
 位置：
 
-- [train.py](/Users/zhanghan/01_code/CogFlow/train.py)
+- [train.py](../train.py)
 
 职责：
 
@@ -47,7 +47,7 @@ parse_config
 
 位置：
 
-- [train.py](/Users/zhanghan/01_code/CogFlow/train.py)
+- [train.py](../train.py)
 
 内部关键步骤：
 
@@ -65,7 +65,7 @@ parse_config
 
 位置：
 
-- [train.py](/Users/zhanghan/01_code/CogFlow/train.py)
+- [train.py](../train.py)
 
 职责：
 
@@ -85,7 +85,7 @@ parse_config
 
 位置：
 
-- [data/dataset_registry.py](/Users/zhanghan/01_code/CogFlow/data/dataset_registry.py)
+- [data/dataset_registry.py](../data/dataset_registry.py)
 
 流程：
 
@@ -95,11 +95,8 @@ parse_config
 
 ### 3.2 当前 registry 映射
 
-- `rat_dataset` -> [data/dataloader_rat.py](/Users/zhanghan/01_code/CogFlow/data/dataloader_rat.py)
-- `babel_dataset` -> [data/dataloader_babel.py](/Users/zhanghan/01_code/CogFlow/data/dataloader_babel.py)
-- `nba_dataset` -> [data/dataloader_nba.py](/Users/zhanghan/01_code/CogFlow/data/dataloader_nba.py)
-- `eth_dataset` -> [data/dataloader_eth_ucy.py](/Users/zhanghan/01_code/CogFlow/data/dataloader_eth_ucy.py)
-- `sdd_dataset` -> [data/dataloader_sdd.py](/Users/zhanghan/01_code/CogFlow/data/dataloader_sdd.py)
+- `rat_dataset` -> [data/dataloader_rat.py](../data/dataloader_rat.py)
+- `babel_dataset` -> [data/dataloader_babel.py](../data/dataloader_babel.py)
 
 ### 3.3 输出
 
@@ -127,7 +124,7 @@ batch 内部字段通常包含：
 
 位置：
 
-- [models/model_registry.py](/Users/zhanghan/01_code/CogFlow/models/model_registry.py)
+- [models/model_registry.py](../models/model_registry.py)
 
 决策顺序：
 
@@ -146,7 +143,7 @@ batch 内部字段通常包含：
 
 入口：
 
-- [models/flow_matching.py](/Users/zhanghan/01_code/CogFlow/models/flow_matching.py)
+- [models/flow_matching.py](../models/flow_matching.py)
 
 构图逻辑：
 
@@ -168,7 +165,7 @@ batch 内部字段通常包含：
 
 入口：
 
-- [models/latent_ar_method.py](/Users/zhanghan/01_code/CogFlow/models/latent_ar_method.py)
+- [models/latent_ar_method.py](../models/latent_ar_method.py)
 
 构图逻辑：
 
@@ -185,7 +182,7 @@ batch 内部字段通常包含：
 
 入口：
 
-- [models/rssm_method.py](/Users/zhanghan/01_code/CogFlow/models/rssm_method.py)
+- [models/rssm_method.py](../models/rssm_method.py)
 
 构图逻辑：
 
@@ -201,13 +198,13 @@ batch 内部字段通常包含：
 
 位置：
 
-- [models/components/decoders/__init__.py](/Users/zhanghan/01_code/CogFlow/models/components/decoders/__init__.py)
+- [models/components/decoders/__init__.py](../models/components/decoders/__init__.py)
 
 ### 5.1 `mlp`
 
 实现：
 
-- [models/components/decoders/mlp_decoder.py](/Users/zhanghan/01_code/CogFlow/models/components/decoders/mlp_decoder.py)
+- [models/components/decoders/mlp_decoder.py](../models/components/decoders/mlp_decoder.py)
 
 用途：
 
@@ -218,7 +215,7 @@ batch 内部字段通常包含：
 
 实现：
 
-- [models/components/decoders/structured_moflow_decoder.py](/Users/zhanghan/01_code/CogFlow/models/components/decoders/structured_moflow_decoder.py)
+- [models/components/decoders/structured_moflow_decoder.py](../models/components/decoders/structured_moflow_decoder.py)
 
 复用组件：
 
@@ -237,7 +234,7 @@ batch 内部字段通常包含：
 
 位置：
 
-- [models/components/constraints/__init__.py](/Users/zhanghan/01_code/CogFlow/models/components/constraints/__init__.py)
+- [models/components/constraints/__init__.py](../models/components/constraints/__init__.py)
 
 当前流程：
 
@@ -247,7 +244,7 @@ batch 内部字段通常包含：
 
 具体实现：
 
-- [models/components/constraints/dissipativity.py](/Users/zhanghan/01_code/CogFlow/models/components/constraints/dissipativity.py)
+- [models/components/constraints/dissipativity.py](../models/components/constraints/dissipativity.py)
 
 当前接口是：
 
@@ -270,7 +267,7 @@ constraint_loss, metrics = constraints(trace, batch, model)
 
 位置：
 
-- [trainer/trainer_registry.py](/Users/zhanghan/01_code/CogFlow/trainer/trainer_registry.py)
+- [trainer/trainer_registry.py](../trainer/trainer_registry.py)
 
 选择顺序：
 
@@ -292,7 +289,7 @@ constraint_loss, metrics = constraints(trace, batch, model)
 
 实现位置：
 
-- [trainer/denoising_model_trainers.py](/Users/zhanghan/01_code/CogFlow/trainer/denoising_model_trainers.py)
+- [trainer/denoising_model_trainers.py](../trainer/denoising_model_trainers.py)
 
 虽然文件名仍然是旧名字，但现在已经承担统一 trainer 的职责。
 
@@ -316,7 +313,7 @@ loss, loss_reg, loss_cls, loss_vel, loss_ctrl, loss_stab = self.denoiser(data, l
 
 入口：
 
-- [trainer/denoising_model_trainers.py](/Users/zhanghan/01_code/CogFlow/trainer/denoising_model_trainers.py)
+- [trainer/denoising_model_trainers.py](../trainer/denoising_model_trainers.py)
 
 每个 iteration 的主流程：
 
@@ -378,7 +375,7 @@ Trainer.train
 
 统一评估入口实现位于：
 
-- [eval_utils.py](/Users/zhanghan/01_code/CogFlow/eval_utils.py)
+- [eval_utils.py](../eval_utils.py)
 
 主流程：
 
@@ -434,5 +431,4 @@ eval_dataloader(...)
 
 相关逻辑位于：
 
-- [models/flow_matching.py](/Users/zhanghan/01_code/CogFlow/models/flow_matching.py)
-
+- [models/flow_matching.py](../models/flow_matching.py)
