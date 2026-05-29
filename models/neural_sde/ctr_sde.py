@@ -549,6 +549,7 @@ def simulate_sde_paths(
     dt: float,
     u_seq_encoded: torch.Tensor | None = None,
     return_terms: bool = False,
+    use_encoded_controls: bool = True,
 ) -> torch.Tensor | dict[str, torch.Tensor]:
     """
     使用 Euler–Maruyama 方法前向仿真 SDE，生成隐变量轨迹 z_seq。
@@ -576,12 +577,16 @@ def simulate_sde_paths(
     sigmas = []
     
     sqrt_dt = math.sqrt(dt)
-    if u_seq_encoded is None:
-        u_seq_encoded = sde.cmd_encoder(u_seq)
+    if use_encoded_controls:
+        if u_seq_encoded is None:
+            u_seq_encoded = sde.cmd_encoder(u_seq)
+        control_seq = u_seq_encoded
+    else:
+        control_seq = u_seq
 
     for t in range(T):
-        u_t = u_seq_encoded[:, t, :]  # [B, stim_dim]
-        u_prev = u_seq_encoded[:, t - 1, :] if t > 0 else u_t  # t=0 => du=0
+        u_t = control_seq[:, t, :]  # [B, stim_dim]
+        u_prev = control_seq[:, t - 1, :] if t > 0 else u_t  # t=0 => du=0
         states.append(z)
         drift = sde.drift(z, u_t, dt=dt, u_prev=u_prev, clip_udot=10)      # [B, z_dim]
         sigma = sde.diffusion(z)       # [B, z_dim]
@@ -601,7 +606,7 @@ def simulate_sde_paths(
         "z_seq": z_seq,  # [B, T, z_dim], post-step rollout for decoder conditioning
         "drift_seq": torch.stack(drifts, dim=1),  # [B, T, z_dim]
         "sigma_seq": torch.stack(sigmas, dim=1),  # [B, T, z_dim]
-        "u_seq": u_seq_encoded,
+        "u_seq": control_seq,
         "u_seq_raw": u_seq,
     }
     

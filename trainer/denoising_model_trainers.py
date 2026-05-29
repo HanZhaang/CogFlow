@@ -251,17 +251,33 @@ class Trainer(object):
         return os.path.join(self.cfg.model_dir, f'{ckpt_name_or_path}.pt')
 
     def _load_state_dict_with_log(self, module, state_dict, *, strict=False, label="model"):
-        incompat = module.load_state_dict(state_dict, strict=strict)
+        module_state = module.state_dict()
+        filtered_state = {}
+        shape_mismatches = []
+        for key, value in state_dict.items():
+            target = module_state.get(key)
+            if target is None:
+                filtered_state[key] = value
+                continue
+            if getattr(target, "shape", None) != getattr(value, "shape", None):
+                shape_mismatches.append((key, tuple(value.shape), tuple(target.shape)))
+                continue
+            filtered_state[key] = value
+
+        incompat = module.load_state_dict(filtered_state, strict=strict)
         missing = list(getattr(incompat, "missing_keys", []))
         unexpected = list(getattr(incompat, "unexpected_keys", []))
-        if len(missing) > 0 or len(unexpected) > 0:
+        if len(shape_mismatches) > 0 or len(missing) > 0 or len(unexpected) > 0:
             self.logger.warning(
-                "Checkpoint %s load used strict=%s with %d missing and %d unexpected keys",
+                "Checkpoint %s load used strict=%s with %d shape mismatches, %d missing and %d unexpected keys",
                 label,
                 strict,
+                len(shape_mismatches),
                 len(missing),
                 len(unexpected),
             )
+            if len(shape_mismatches) > 0:
+                self.logger.warning("Shape mismatches (%s): %s", label, shape_mismatches[:20])
             if len(missing) > 0:
                 self.logger.warning("Missing keys (%s): %s", label, missing[:20])
             if len(unexpected) > 0:

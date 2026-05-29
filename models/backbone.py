@@ -35,6 +35,7 @@ class MotionTransformer(nn.Module):
         if self.m2_decoder_style not in {HISTORICAL_PRE_FILM, LEGACY_BND_POST_FILM}:
             raise ValueError(f"Unknown M2 decoder style: {self.m2_decoder_style}")
         self.use_legacy_bnd_decoder = self.ablation_mode == "m2" and self.m2_decoder_style == LEGACY_BND_POST_FILM
+        self.use_encoded_sde_controls = self.ablation_mode == "m2" and self.m2_decoder_style == LEGACY_BND_POST_FILM
         assert not use_pre_norm, "Pre-norm is not supported in this model"
         self.T_f = self.config.get('future_frames', 0)
         self.dt = self.config.get('dt', 0)
@@ -292,7 +293,7 @@ class MotionTransformer(nn.Module):
                 dtype=z0.dtype,
             )                                          # [B, T_f, stim_dim]
 
-        if u_seq_encoded is None:
+        if self.use_encoded_sde_controls and u_seq_encoded is None:
             u_seq_encoded = self.neural_sde.cmd_encoder(u_seq)
 
         rollout_out = simulate_sde_paths(
@@ -302,6 +303,7 @@ class MotionTransformer(nn.Module):
             dt=self.dt,
             u_seq_encoded=u_seq_encoded,
             return_terms=return_terms,
+            use_encoded_controls=self.use_encoded_sde_controls,
         )
         if return_terms:
             rollout_out["z0"] = z0
@@ -329,7 +331,8 @@ class MotionTransformer(nn.Module):
             )
             cache["z0"] = z0
             cache["u_seq"] = u_seq
-            cache["u_seq_encoded"] = self.neural_sde.cmd_encoder(u_seq)
+            if self.use_encoded_sde_controls:
+                cache["u_seq_encoded"] = self.neural_sde.cmd_encoder(u_seq)
 
         return cache
         
