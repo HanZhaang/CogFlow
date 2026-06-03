@@ -56,7 +56,7 @@ def parse_config():
 		'--sde-control-style',
 		type=str,
 		choices=[AUTO_SDE_CONTROL_STYLE, RAW_HISTORICAL_SDE_CONTROL, ENCODED_SDE_CONTROL],
-		default="encoded",
+		default="raw_historical",
 		help="Use 'encoded' with historical_pre_film to get cmd-encoded controls.",
 	)
 	parser.add_argument('--enable_dissipativity', action='store_true', help="Enable boundedness loss (legacy alias)")

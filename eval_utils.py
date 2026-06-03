@@ -63,14 +63,14 @@ def add_eval_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         '--m2-decoder-style',
         type=str,
         choices=[AUTO_M2_DECODER_STYLE, HISTORICAL_PRE_FILM, LEGACY_BND_POST_FILM],
-        default=None,
+        default="auto",
         help='Override M2 decoder path style or auto-detect from checkpoint.',
     )
     parser.add_argument(
         '--sde-control-style',
         type=str,
         choices=[AUTO_SDE_CONTROL_STYLE, RAW_HISTORICAL_SDE_CONTROL, ENCODED_SDE_CONTROL],
-        default=None,
+        default="encoded",
         help="Override SDE control path style. Use 'encoded' with historical_pre_film to get old attention plus cmd-encoded controls.",
     )
     parser.add_argument('--enable_dissipativity', action='store_true', help='Enable dissipativity constraint.')

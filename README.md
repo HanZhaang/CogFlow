@@ -77,12 +77,12 @@ weights/babel/checkpoint_best.pt
 ### Default rat
 
 ```bash
-python train.py --cfg cfg/full_cfg/cor_rat_fm_mn.yml --exp rat_release
+python train.py --cfg cfg/full_cfg/cor_rat_fm_mn.yml --exp rat_origin_encoded
 ```
 
 If $L_{\textrm{bnd}}$ is included, use the following command:
 ```bash
-python train.py --cfg cfg/full_cfg/cor_rat_fm_mn.yml --exp rat_test --enable_dissipativity --dissipativity_weight 0.001
+CUDA_VISIBLE_DEVICES=0 python train.py --cfg cfg/full_cfg/cor_rat_fm_mn.yml --exp rat_origin_raw
 ```
 
 ### Default babel
